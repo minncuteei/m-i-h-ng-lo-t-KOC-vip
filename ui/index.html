@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tạo lời mời KOC - Mời hàng loạt KOC VIP</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="modal-window" id="inviteDialog">
+    <!-- Header -->
+    <div class="dialog-heading">
+      <div class="heading-title">
+        <h2>📨 Tạo lời mời KOC</h2>
+        <p id="inviteLimitHint">Kiểm tra an toàn trước khi gửi. Mỗi lời mời dùng 50 KOC và tối đa 100 sản phẩm.</p>
+      </div>
+      <div class="heading-actions">
+        <button class="icon-button" type="button" id="btnMinimize" title="Thu nhỏ popup">−</button>
+        <button class="icon-button" type="button" id="btnClose" title="Đóng">×</button>
+      </div>
+    </div>
+
+    <!-- Speed Bar / Top Controls -->
+    <div class="invite-speed-bar">
+      <button type="button" id="btnOpenKocDrawer" class="chip-btn" title="Bấm để xem & dán danh sách KOC">
+        <span>Đã chọn</span> <strong id="chipKocCount">0 KOC ▾</strong>
+      </button>
+      <button type="button" id="btnOpenKocPool" class="chip-btn">
+        📋 Bảng tổng KOC / Nhập KOC
+      </button>
+      <div id="tabStatusBadge" class="status-badge checking">
+        <span class="dot"></span>
+        <span class="text">Đang dò tab TikTok...</span>
+      </div>
+      <span class="daily-limit-badge" id="dailyLimitBadge">Hạn mức 24h: 0/200 nhóm</span>
+      <button type="button" id="btnOpenNewTab" class="icon-button" title="Mở tab riêng toàn màn hình">⤢</button>
+    </div>
+
+    <!-- 3-Column Grid -->
+    <div class="invite-grid">
+      <!-- CỘT 1: Thông tin lời mời -->
+      <section class="invite-card">
+        <h3>1. Thông tin lời mời</h3>
+        <div class="dialog-grid">
+          <label>
+            <span>Tên lời mời</span>
+            <input type="text" id="inputTitle" maxlength="80" placeholder="VD: STONKAIKOC_SHOP_DATE_N1">
+          </label>
+          <label>
+            <span>Nhân viên mời</span>
+            <input type="text" id="inputStaff" placeholder="Nhập tên NV (tự lưu)">
+          </label>
+        </div>
+
+        <div class="dialog-grid">
+          <label>
+            <span>Có hiệu lực đến</span>
+            <input type="date" id="inputExpiresAt">
+          </label>
+          <label>
+            <span>Loại nội dung ưu tiên</span>
+            <select id="selectContentType">
+              <option value="video" selected>Video link bán hàng</option>
+              <option value="live">LIVE</option>
+              <option value="both">Video + LIVE</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="quick-date-row" aria-label="Chọn nhanh thời hạn">
+          <button type="button" data-days="7">1 tuần</button>
+          <button type="button" data-months="1">1 tháng</button>
+          <button type="button" data-months="3">3 tháng</button>
+          <button type="button" data-months="6">6 tháng</button>
+          <button type="button" data-months="12">1 năm</button>
+        </div>
+
+        <!-- Hoa hồng -->
+        <div class="commission-row">
+          <label>
+            <span>Thường (%)</span>
+            <input type="number" id="inputCommission" value="10" min="1" max="99">
+          </label>
+          <label>
+            <span>Ads (%)</span>
+            <input type="number" id="inputAdsCommission" value="1" min="0" max="99">
+          </label>
+          <label class="inline-check" style="margin-bottom: 6px;">
+            <input type="checkbox" id="chkShareAfter">
+            <span>Gửi tin sau mời</span>
+          </label>
+        </div>
+
+        <!-- Liên hệ -->
+        <div class="dialog-grid">
+          <label>
+            <span>Zalo <b class="req">*</b></span>
+            <input type="text" id="inputZalo" placeholder="Số Zalo liên hệ (Bắt buộc)">
+          </label>
+          <label>
+            <span>Facebook</span>
+            <input type="text" id="inputFacebook" placeholder="Link/tài khoản Facebook">
+          </label>
+        </div>
+
+        <!-- Lời nhắn -->
+        <label class="field-label">
+          <span>Nội dung lời mời</span>
+          <textarea id="inputMessage" rows="5" placeholder="Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!">Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!</textarea>
+        </label>
+
+        <!-- Chiến lược nâng cao -->
+        <label class="checkbox-row">
+          <input type="checkbox" id="chkResolveConflict" checked>
+          <span>Kéo KOC trùng về lượt mời này (tự gỡ khỏi đợt cũ)</span>
+        </label>
+        <div class="checkbox-row highlight">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="chkTestRun">
+            <span><b>Chạy thử:</b> Chỉ mời</span>
+          </label>
+          <input type="number" id="inputTestRunCount" value="5" min="1" max="50">
+          <span>KOC</span>
+        </div>
+      </section>
+
+      <!-- CỘT 2: Chọn sản phẩm (LUÔN PHÂN LOẠI THEO LƯỢT BÁN TỪ CAO XUỐNG THẤP) -->
+      <section class="invite-card invite-product-card">
+        <div class="product-card-header">
+          <h3>2. Chọn sản phẩm</h3>
+          <button type="button" id="btnScanProducts" class="primary-button-sm">
+            🔄 Quét từ Shop
+          </button>
+        </div>
+
+        <div class="product-search-row">
+          <input type="search" id="inputProductSearch" placeholder="🔍 Tìm theo tên, Product ID hoặc SKU...">
+        </div>
+
+        <div class="product-filter-bar">
+          <label class="select-all-box-label" id="lblSelectAllWrapper" title="Ấn lần 1 chọn full (tối đa 100 SP), ấn lần 2 bỏ full">
+            <input type="checkbox" id="chkSelectAllProducts" class="square-chk">
+            <span id="lblSelectAllText">Chọn full (0)</span>
+          </label>
+          <div class="product-filter-dropdowns">
+            <select id="selectProductSort" title="Sắp xếp sản phẩm">
+              <option value="sales:desc" selected>🔥 Bán nhiều nhất</option>
+              <option value="revenue:desc">💰 Doanh thu cao (GMV)</option>
+              <option value="stock:desc">📦 Tồn kho nhiều</option>
+              <option value="title:asc">🔤 Tên A-Z</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="manual-product-row">
+          <input type="text" id="inputManualPid" placeholder="Dán Product ID thủ công (vd: 1732626228898006171)">
+          <button type="button" id="btnAddManualPid" class="secondary-button-sm">Thêm SP</button>
+        </div>
+
+        <div id="productSummaryBar" class="product-summary-text">
+          <span>0/0 sản phẩm • đã chọn 0/100</span>
+          <span style="color: var(--brand); font-weight: 600;">🔥 Sắp xếp: Bán nhiều nhất</span>
+        </div>
+
+        <div id="productListContainer" class="product-list-scroll">
+          <div style="padding: 30px; text-align: center; color: var(--text-muted);">
+            Đang sẵn sàng. Bấm <b>"Quét từ Shop"</b> để nạp sản phẩm tự động từ TikTok Shop.
+          </div>
+        </div>
+      </section>
+
+      <!-- CỘT 3: Hàng mẫu & Xem trước -->
+      <div class="invite-card-col">
+        <!-- 3. Hàng mẫu miễn phí -->
+        <section class="invite-card">
+          <h3>3. Hàng mẫu miễn phí</h3>
+          <label class="inline-check">
+            <input type="checkbox" id="chkSampleEnabled" checked>
+            <span>Cung cấp hàng mẫu miễn phí</span>
+          </label>
+          <div class="sample-mode-options" id="sampleModeBox">
+            <label>
+              <input type="radio" name="sampleApprovalMode" value="manual" checked>
+              <span>Xem xét thủ công</span>
+            </label>
+            <label>
+              <input type="radio" name="sampleApprovalMode" value="auto">
+              <span>Tự động phê duyệt nếu TikTok hỗ trợ</span>
+            </label>
+          </div>
+        </section>
+
+        <!-- 4. Xem trước lời mời (Mở rộng khung hiển thị) -->
+        <section class="invite-card preview-card-extended">
+          <h3>4. Xem trước lời mời</h3>
+          <div class="invite-preview">
+            <strong id="previewTitle">Hannah Seyo x nhatminh</strong>
+            <p id="previewMessage">Nội dung lời mời sẽ hiển thị tại đây...</p>
+            <div class="preview-products-box">
+              <span id="previewProductsCount">Chưa chọn sản phẩm</span>
+              <ul id="previewProductList"></ul>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Footer Actions -->
+    <div class="dialog-actions">
+      <div class="actions-left">
+        <button type="button" id="btnCancel" class="secondary-button ghost">Hủy</button>
+        <button type="button" id="btnOpenKocPoolFooter" class="secondary-button">📋 Quản lý KOC</button>
+      </div>
+      <div class="actions-right">
+        <span id="statusQuickText" class="status-quick-text"></span>
+        <button type="button" id="btnConflictCheck" class="secondary-button">Kiểm trùng</button>
+        <button type="button" id="btnDryRun" class="secondary-button" title="Tạo thử 1 nhóm với đúng 1 KOC ID số để cô lập lỗi trước khi chạy hàng loạt">🧪 Kiểm tra cấu hình (1 KOC)</button>
+        <button type="button" id="btnSendReal" class="danger-button solid">Gửi thật</button>
+      </div>
+    </div>
+
+    <!-- KOC Drawer / Sub-modal -->
+    <div id="kocDrawerOverlay" class="modal-overlay-drawer" hidden>
+      <div class="drawer-panel">
+        <div class="drawer-header">
+          <h3>📋 Danh sách KOC nhận lời mời</h3>
+          <button type="button" id="btnCloseKocDrawer" class="icon-button">×</button>
+        </div>
+        <p style="font-size: 12px; color: var(--text-muted);">
+          Dán danh sách ID KOC tại đây (hỗ trợ copy từ Excel, Google Sheets, file CSV, @username, link TikTok, ID số... tiện ích sẽ tự động lọc sạch ID):
+        </p>
+        <textarea id="kocDrawerText" class="koc-textarea" placeholder="minhdz&#10;bepthongminh009&#10;@thuy_tieen22051999&#10;7495837291823719283"></textarea>
+        
+        <div class="koc-drawer-actions">
+          <div style="display: flex; gap: 8px;">
+            <label class="secondary-button-sm" style="cursor: pointer;">
+              📁 Nạp File (Excel .xlsx / CSV / TXT)
+              <input type="file" id="kocDrawerFileInput" accept=".xlsx, .xls, .csv, .txt" hidden>
+            </label>
+            <button type="button" id="btnDrawerLookup" class="primary-button-sm">
+              🔍 Tra cứu OEC ID từ Username (import_check)
+            </button>
+          </div>
+          <button type="button" id="btnDrawerSave" class="primary-button">
+            Xong & Áp dụng
+          </button>
+        </div>
+
+        <div class="koc-stats-chip" id="kocDrawerStats">
+          Tổng nhận diện: <b>0</b> KOC (<b>0</b> đã có OEC ID, <b>0</b> cần tra cứu) • Dự kiến: <b>0</b> nhóm
+        </div>
+      </div>
+    </div>
+
+    <!-- Execution Panel (Tiến trình gửi lời mời) -->
+    <div id="executionPanel" class="execution-panel" hidden>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="font-size: 16px; font-weight: 700;">🚀 Tiến trình gửi lời mời KOC VIP</h2>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" id="btnExportDebug" class="secondary-button-sm" title="Xuất toàn bộ Run và Chunks từ IndexedDB ra JSON">📁 Xuất debug</button>
+          <button type="button" id="btnExecPause" class="secondary-button-sm">Tạm dừng</button>
+          <button type="button" id="btnExecResume" class="secondary-button-sm" hidden>Tiếp tục</button>
+          <button type="button" id="btnExecStop" class="danger-button solid" style="padding: 4px 12px; font-size: 12px;">Hủy bỏ</button>
+          <button type="button" id="btnExecClose" class="secondary-button-sm" hidden>Đóng bảng</button>
+        </div>
+      </div>
+
+      <div class="metrics-row">
+        <div class="metric-box success">
+          <span class="label">Thành công</span>
+          <strong id="mSent">0</strong>
+        </div>
+        <div class="metric-box warning">
+          <span class="label">Bị trùng / Bỏ qua</span>
+          <strong id="mSkipped">0</strong>
+        </div>
+        <div class="metric-box danger">
+          <span class="label">Lỗi</span>
+          <strong id="mFailed">0</strong>
+        </div>
+        <div class="metric-box info">
+          <span class="label">Chờ reset 0h</span>
+          <strong id="mReset">0</strong>
+        </div>
+      </div>
+
+      <div class="progress-container">
+        <div class="progress-bar-outer">
+          <div id="execProgressBar" class="progress-bar-inner"></div>
+        </div>
+        <div class="progress-text-row">
+          <span id="execProgressStatus">Đang chuẩn bị...</span>
+          <span id="execProgressPercent">0%</span>
+        </div>
+      </div>
+
+      <div class="execution-log" id="execLogContent">
+        <div>[Khởi tạo] Hệ thống sẵn sàng...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="xlsx.mini.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

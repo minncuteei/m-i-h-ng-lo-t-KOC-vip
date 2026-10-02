@@ -1,0 +1,95 @@
+{
+  "manifest_version": 3,
+  "name": "Mời hàng loạt KOC VIP",
+  "version": "1.0.0",
+  "description": "Công cụ gửi lời mời hàng loạt KOC TikTok Shop chuyên nghiệp, chạy hoàn toàn cục bộ (Local).",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Mời hàng loạt KOC VIP",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "scripting",
+    "alarms",
+    "notifications"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "ui/*",
+        "icons/*",
+        "src/content/page-executor.js"
+      ],
+      "matches": [
+        "https://affiliate.tiktok.com/*",
+        "https://affiliate-us.tiktok.com/*",
+        "https://affiliate.tiktokglobalshop.com/*",
+        "https://affiliate.tiktokshopglobalselling.com/*"
+      ]
+    }
+  ],
+  "host_permissions": [
+    "https://affiliate.tiktok.com/*",
+    "https://affiliate-us.tiktok.com/*",
+    "https://affiliate.tiktokglobalshop.com/*",
+    "https://affiliate.tiktokshopglobalselling.com/*"
+  ],
+  "content_scripts": [
+    {
+      "js": [
+        "src/content/page-executor.js"
+      ],
+      "world": "MAIN",
+      "matches": [
+        "https://affiliate.tiktok.com/*",
+        "https://affiliate-us.tiktok.com/*",
+        "https://affiliate.tiktokglobalshop.com/*",
+        "https://affiliate.tiktokshopglobalselling.com/*"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "js": [
+        "src/content/captcha-detector.js"
+      ],
+      "matches": [
+        "https://affiliate.tiktok.com/*",
+        "https://affiliate-us.tiktok.com/*",
+        "https://affiliate.tiktokglobalshop.com/*",
+        "https://affiliate.tiktokshopglobalselling.com/*"
+      ],
+      "all_frames": false,
+      "run_at": "document_start"
+    },
+    {
+      "js": [
+        "src/content/local-invite-executor.js"
+      ],
+      "matches": [
+        "https://affiliate.tiktok.com/*",
+        "https://affiliate-us.tiktok.com/*",
+        "https://affiliate.tiktokglobalshop.com/*",
+        "https://affiliate.tiktokshopglobalselling.com/*"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}

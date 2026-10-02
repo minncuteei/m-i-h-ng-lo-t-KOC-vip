@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mời Hàng Loạt KOC VIP</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-box">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </div>
+        <div>
+          <h1>Mời KOC VIP</h1>
+          <p class="tagline">Local • An toàn • Không giới hạn</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div id="tabStatusBadge" class="status-badge checking">
+          <span class="dot"></span>
+          <span class="text">Đang dò tab TikTok...</span>
+        </div>
+        <button type="button" id="btnOpenTab" class="btn-icon" title="Mở toàn màn hình ở tab mới">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Banner cảnh báo tab TikTok nếu chưa mở -->
+    <div id="noTabBanner" class="alert-banner warning" hidden>
+      <div class="alert-content">
+        <span>⚠️ Chưa phát hiện tab TikTok Affiliate đang mở.</span>
+        <button type="button" id="btnOpenTikTok" class="btn-sm primary">Mở TikTok Shop Affiliate</button>
+      </div>
+    </div>
+
+    <!-- Main Content 2 Cột khi ở màn hình lớn -->
+    <main class="app-content-grid">
+      <!-- CỘT TRÁI: Sản phẩm & Cấu hình -->
+      <div class="grid-column">
+        <!-- 1. Danh sách sản phẩm -->
+        <section class="card">
+          <div class="card-header">
+            <h2>1. Sản phẩm gắn lời mời</h2>
+            <div class="header-btns">
+              <button type="button" id="btnScanProducts" class="btn-sm secondary">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                Quét từ Shop
+              </button>
+            </div>
+          </div>
+          <div id="productScanStatus" class="hint-text">Bấm "Quét từ Shop" để nạp sản phẩm đang mở bán trên TikTok Shop.</div>
+
+          <!-- Nhập thủ công Product ID dự phòng -->
+          <div class="manual-product-add">
+            <input type="text" id="inputManualProductId" placeholder="Dán Product ID thủ công (vd: 1732626228898006171)">
+            <button type="button" id="btnAddManualProduct" class="btn-sm secondary">Thêm</button>
+          </div>
+
+          <div id="productListContainer" class="product-list-box" hidden>
+            <div class="product-select-all">
+              <label><input type="checkbox" id="chkSelectAllProducts"> Chọn tất cả</label>
+              <span id="selectedProductCount">Đã chọn 0</span>
+            </div>
+            <div id="productList" class="product-items"></div>
+            <!-- Phân trang sản phẩm -->
+            <div class="product-pagination">
+              <button type="button" id="btnPrevProductPage" class="btn-sm secondary" disabled>Trang trước</button>
+              <span id="productPageIndicator">Trang 1</span>
+              <button type="button" id="btnNextProductPage" class="btn-sm secondary">Trang sau</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. Cấu hình chiến dịch -->
+        <section class="card">
+          <div class="card-header">
+            <h2>2. Cấu hình lời mời</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group col-6">
+              <label>Tiền tố tên lời mời</label>
+              <input type="text" id="cfgPrefix" value="KOCVIP" placeholder="VD: KOCVIP">
+            </div>
+            <div class="form-group col-6">
+              <label>Thời hạn (ngày)</label>
+              <input type="number" id="cfgDays" value="365" min="1" max="365">
+            </div>
+            <div class="form-group col-6">
+              <label>Hoa hồng Affiliate (%)</label>
+              <input type="number" id="cfgCommission" value="10" min="1" max="99">
+            </div>
+            <div class="form-group col-6">
+              <label>Hoa hồng Ads (%)</label>
+              <input type="number" id="cfgAdsCommission" value="1" min="0" max="99">
+            </div>
+            <div class="form-group col-12">
+              <label>Yêu cầu nội dung</label>
+              <select id="cfgContentPref">
+                <option value="all">Tất cả (Video &amp; Livestream)</option>
+                <option value="video">Chỉ Video</option>
+                <option value="live">Chỉ Livestream</option>
+              </select>
+            </div>
+            <div class="form-group col-12">
+              <label class="checkbox-row">
+                <input type="checkbox" id="cfgSampleEnabled">
+                <span>Hỗ trợ gửi mẫu miễn phí (Free Sample)</span>
+              </label>
+              <div id="sampleModeBox" class="sub-options" hidden>
+                <label><input type="radio" name="sampleMode" value="manual" checked> Xét duyệt thủ công</label>
+                <label><input type="radio" name="sampleMode" value="auto"> Tự động phê duyệt</label>
+              </div>
+            </div>
+            <div class="form-group col-12">
+              <label>Số Zalo / Hotline liên hệ</label>
+              <input type="text" id="cfgZalo" placeholder="09xxxxxxxx (tự điền vào thẻ liên hệ)">
+            </div>
+            <div class="form-group col-12">
+              <label>Lời nhắn gửi KOC</label>
+              <textarea id="cfgMessage" rows="2" placeholder="Chào bạn, Shop gửi lời mời hợp tác độc quyền kèm mức hoa hồng hấp dẫn..."></textarea>
+            </div>
+          </div>
+
+          <div class="advanced-box">
+            <label class="checkbox-row">
+              <input type="checkbox" id="cfgResolveConflict" checked>
+              <span>Kéo KOC trùng về lời mời này (tự gỡ khỏi lời mời cũ)</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="cfgShareChat">
+              <span>Tự động nhắn tin Cooperation Chat sau khi mời</span>
+            </label>
+            <div class="test-run-box">
+              <label class="checkbox-row highlight">
+                <input type="checkbox" id="cfgTestRun">
+                <span><b>Chế độ Chạy Thử:</b> Chỉ mời 1 nhóm nhỏ để kiểm tra</span>
+              </label>
+              <div id="testRunCountBox" class="sub-options" hidden>
+                <span>Số KOC chạy thử:</span>
+                <input type="number" id="cfgTestRunCount" value="5" min="1" max="50" style="width: 70px;">
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- CỘT PHẢI: Danh sách KOC, Tra cứu ID & Tiến độ -->
+      <div class="grid-column">
+        <!-- 3. Danh sách KOC -->
+        <section class="card">
+          <div class="card-header">
+            <h2>3. Danh sách KOC</h2>
+            <div class="header-btns">
+              <label class="btn-sm secondary file-label">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+                Nhập CSV / TXT
+                <input type="file" id="fileKocInput" accept=".csv, .txt" hidden>
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <textarea id="kocInputText" rows="6" placeholder="Dán danh sách KOC tại đây, mỗi dòng 1 KOC:&#10;• Creator OEC ID (vd: 7495837291823719283)&#10;• Username TikTok (vd: @nguyenvana hoặc nguyenvana)&#10;• Link profile TikTok"></textarea>
+          </div>
+          <div class="koc-action-bar">
+            <button type="button" id="btnLookupHandles" class="btn-sm secondary" style="width: 100%;">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              🔍 Tra cứu OEC ID từ Username (import_check)
+            </button>
+          </div>
+          <div id="lookupStatusText" class="hint-text" style="margin-top: 4px;" hidden></div>
+          <div class="koc-stats-bar">
+            <div>Tổng nhận diện: <b id="statTotalKoc">0</b> KOC (<span id="statOecCount">0</span> đã có ID)</div>
+            <div>Dự kiến: <b id="statChunkCount">0</b> nhóm (tối đa 50 KOC/nhóm)</div>
+          </div>
+        </section>
+
+        <!-- 4. Tiến trình & Điều khiển -->
+        <section class="card">
+          <div class="card-header">
+            <h2>4. Tiến trình gửi lời mời</h2>
+          </div>
+          
+          <div class="metrics-grid">
+            <div class="metric-card success">
+              <span class="label">Thành công</span>
+              <strong id="metricSent">0</strong>
+            </div>
+            <div class="metric-card warning">
+              <span class="label">Bị trùng/Bỏ qua</span>
+              <strong id="metricSkipped">0</strong>
+            </div>
+            <div class="metric-card danger">
+              <span class="label">Lỗi</span>
+              <strong id="metricFailed">0</strong>
+            </div>
+            <div class="metric-card info">
+              <span class="label">Chờ reset 0h</span>
+              <strong id="metricReset">0</strong>
+            </div>
+          </div>
+
+          <div class="progress-wrap">
+            <div class="progress-bar">
+              <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="progress-label">
+              <span id="progressText">Sẵn sàng</span>
+              <span id="progressPercent">0%</span>
+            </div>
+          </div>
+
+          <div class="action-buttons">
+            <button type="button" id="btnStart" class="btn primary large">BẮT ĐẦU MỜI HÀNG LOẠT</button>
+            <div id="runningControls" class="running-group" hidden>
+              <button type="button" id="btnPause" class="btn secondary">Tạm dừng</button>
+              <button type="button" id="btnResume" class="btn secondary" hidden>Tiếp tục</button>
+              <button type="button" id="btnStop" class="btn danger">Hủy bỏ</button>
+            </div>
+          </div>
+
+          <div class="log-box">
+            <div class="log-header">Nhật ký xử lý</div>
+            <div id="logContent" class="log-content">Chưa có tác vụ nào đang chạy.</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

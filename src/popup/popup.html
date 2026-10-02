@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mời hàng loạt KOC VIP</title>
+  <style>
+    :root {
+      --primary: #7C3AED;
+      --primary-hover: #6D28D9;
+      --primary-light: #EDE9FE;
+      --pink: #EC4899;
+      --pink-dark: #BE185D;
+      --text: #0F172A;
+      --text-muted: #64748B;
+      --bg: #F8FAFC;
+      --card-bg: #FFFFFF;
+      --border: #E2E8F0;
+      --success: #10B981;
+      --warning: #F59E0B;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13.5px;
+      line-height: 1.5;
+      user-select: none;
+    }
+
+    /* HEADER */
+    .header {
+      padding: 16px 18px;
+      background: linear-gradient(135deg, #1E1B4B 0%, #311042 50%, #4C0519 100%);
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      border: 2.5px solid #F43F5E;
+      box-shadow: 0 0 14px rgba(244, 63, 94, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .header-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .header-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .header-title-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .header-title {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.2px;
+      color: #FFFFFF;
+      white-space: nowrap;
+    }
+
+    .header-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #FFFFFF;
+    }
+
+    .header-sub {
+      font-size: 11.5px;
+      color: #E2E8F0;
+      opacity: 0.85;
+      margin-top: 1px;
+    }
+
+    /* CONTAINER */
+    .container {
+      padding: 14px 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* STATUS CARD */
+    .status-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--warning);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+    }
+
+    .status-dot.connected {
+      background: var(--success);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+    }
+
+    .status-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .status-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .status-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ACTIONS */
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .btn {
+      width: 100%;
+      height: 44px;
+      border-radius: 11px;
+      border: 0;
+      font-size: 13.5px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.18s ease;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--pink));
+      color: #FFFFFF;
+      box-shadow: 0 6px 18px rgba(124, 58, 237, 0.35);
+    }
+
+    .btn-primary:hover {
+      box-shadow: 0 8px 22px rgba(124, 58, 237, 0.45);
+      filter: brightness(1.06);
+    }
+
+    .btn-secondary {
+      background: #FFFFFF;
+      color: #0F172A;
+      border: 1.5px solid #CBD5E1;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+    }
+
+    .btn-secondary:hover {
+      background: #F1F5F9;
+      border-color: #94A3B8;
+    }
+
+    /* FOOTER TIP */
+    .footer-tip {
+      background: #EFF6FF;
+      border: 1px solid #DBEAFE;
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 11.5px;
+      color: #1E40AF;
+      line-height: 1.45;
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+    }
+
+    .footer-tip span {
+      font-size: 14px;
+      line-height: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-logo">
+      <img src="../../icons/chicken.png" alt="Mascot">
+    </div>
+    <div class="header-info">
+      <div class="header-title-row">
+        <div class="header-title">Mời KOC VIP</div>
+        <div class="header-badge">Local v1.0.0</div>
+      </div>
+      <div class="header-sub">Tự động mời KOC TikTok Shop</div>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- TRẠNG THÁI KẾT NỐI -->
+    <div class="status-card" id="statusCard">
+      <div class="status-dot" id="statusDot"></div>
+      <div class="status-info">
+        <div class="status-title" id="statusTitle">Đang kiểm tra tab TikTok...</div>
+        <div class="status-sub" id="statusSub">Vui lòng chờ trong giây lát</div>
+      </div>
+    </div>
+
+    <!-- CÁC NÚT THAO TÁC -->
+    <div class="actions">
+      <button class="btn btn-primary" id="btnOpenModal">
+        <span>✨</span>
+        <span>Mở Bảng Mời KOC VIP</span>
+      </button>
+
+      <button class="btn btn-secondary" id="btnOpenAffiliate">
+        <span>🚀</span>
+        <span>Mở trang TikTok Affiliate</span>
+      </button>
+    </div>
+
+    <!-- HƯỚNG DẪN NHANH -->
+    <div class="footer-tip">
+      <span>💡</span>
+      <div>
+        Bạn cũng có thể bấm trực tiếp vào <b>biểu tượng chú gà viền hồng</b> ở mép phải màn hình TikTok để mở bảng mời bất kỳ lúc nào.
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
