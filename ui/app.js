@@ -814,16 +814,56 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (typeof XLSX === "undefined") {
             throw new Error("Thư viện đọc Excel chưa sẵn sàng");
           }
-          const workbook = XLSX.read(data, { type: "array" });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const csvText = XLSX.utils.sheet_to_csv(worksheet);
-          kocDrawerText.value = csvText;
-          updateKocListFromText();
-          normalizeDrawerText();
-          saveSettings();
+
+          let workbook;
+          try {
+            workbook = XLSX.read(data, { type: "array" });
+          } catch (readErr) {
+            console.warn("XLSX.read (array) failed, thử sang binary:", readErr);
+            const binary = Array.from(data).map(b => String.fromCharCode(b)).join("");
+            workbook = XLSX.read(binary, { type: "binary" });
+          }
+
+          let allCsvText = "";
+          if (workbook && workbook.SheetNames) {
+            for (const sName of workbook.SheetNames) {
+              const ws = workbook.Sheets[sName];
+              if (ws) {
+                const sheetText = XLSX.utils.sheet_to_csv(ws);
+                if (sheetText && sheetText.trim()) {
+                  allCsvText += (allCsvText ? "\n" : "") + sheetText;
+                }
+              }
+            }
+          }
+
+          if (allCsvText.trim()) {
+            kocDrawerText.value = allCsvText;
+            updateKocListFromText();
+            normalizeDrawerText();
+            saveSettings();
+          } else {
+            throw new Error("File Excel không có dữ liệu nội dung");
+          }
         } catch (err) {
-          alert("Lỗi đọc file Excel: " + err.message);
+          console.error("Lỗi parse file Excel:", err);
+          // Fallback tự động đọc dưới dạng văn bản (đối với file CSV/TSV bị đổi tên thành .xlsx hoặc cấu trúc text)
+          const textReader = new FileReader();
+          textReader.onload = (tevt) => {
+            const rawText = tevt.target?.result || "";
+            if (rawText && typeof rawText === "string") {
+              const testList = parseKocInputData(rawText);
+              if (testList.length > 0) {
+                kocDrawerText.value = rawText;
+                updateKocListFromText();
+                normalizeDrawerText();
+                saveSettings();
+                return;
+              }
+            }
+            alert("Lỗi đọc file Excel: " + (err.message || "File không đúng định dạng"));
+          };
+          textReader.readAsText(file);
         } finally {
           e.target.value = ""; // Reset input file để có thể chọn lại cùng file nếu cần
         }
