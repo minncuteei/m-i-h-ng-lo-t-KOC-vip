@@ -965,6 +965,23 @@
       let exitReason = "Đã hoàn thành tất cả chunks";
       let lastChunkResult = null;
 
+      currentActiveRun = {
+        serverRunId: manifest.serverRunId,
+        startedAt: Date.now(),
+        status: "running",
+        totalRecipients: totalRecipients,
+        processed: 0,
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        waiting: 0,
+        currentChunkIndex: 1,
+        totalChunks: chunks.length,
+        completed: false,
+      };
+      startMiniBarTimer();
+      renderMiniBar();
+
       // Watchdog 90s canh kẹt tiến trình
       const watchdogTimer = setIntervalBenBi(() => {
         if (controller.cancelled || controller.paused) return;
@@ -977,8 +994,15 @@
 
       while (pending.length && !controller.cancelled) {
         if (controller.paused) {
+          if (currentActiveRun && currentActiveRun.status !== "paused") {
+            currentActiveRun.status = "paused";
+            renderMiniBar();
+          }
           await sleep(1000);
           continue;
+        } else if (currentActiveRun && currentActiveRun.status === "paused") {
+          currentActiveRun.status = "running";
+          renderMiniBar();
         }
 
         const chunk = pending[0];
@@ -993,6 +1017,27 @@
             payload: { serverRunId: manifest.serverRunId, chunkId: chunk.chunkId, status: res.state },
           });
         } catch {}
+
+        chunks = await localDb("listChunks", { serverRunId: manifest.serverRunId });
+        let sentCount = 0, skippedCount = 0, failedCount = 0, waitingCount = 0;
+        for (const c of (chunks || [])) {
+          for (const r of (c.recipients || [])) {
+            if (r.status === "sent") sentCount++;
+            else if (r.status === "skipped") skippedCount++;
+            else if (r.status === "failed") failedCount++;
+            else if (r.status === "waiting_daily_reset") waitingCount++;
+          }
+        }
+        if (currentActiveRun) {
+          currentActiveRun.sent = sentCount;
+          currentActiveRun.skipped = skippedCount;
+          currentActiveRun.failed = failedCount;
+          currentActiveRun.waiting = waitingCount;
+          currentActiveRun.processed = sentCount + skippedCount + failedCount;
+          const finishedChunks = (chunks || []).filter(c => TERMINAL_CHUNK_STATUSES.has(c.status)).length;
+          currentActiveRun.currentChunkIndex = Math.min(chunks.length, finishedChunks + 1);
+          renderMiniBar();
+        }
 
         if (res.state === "waiting_daily_reset") {
           exitReason = "Shop chạm hạn mức mời ngày của TikTok (chờ 0h reset)";
@@ -1018,7 +1063,6 @@
           break;
         }
 
-        chunks = await localDb("listChunks", { serverRunId: manifest.serverRunId });
         const dbPending = chunks.filter(c => !TERMINAL_CHUNK_STATUSES.has(c.status));
         pending = dbPending.filter(c => c.chunkId !== chunk.chunkId);
       }
@@ -1038,6 +1082,13 @@
       const finalStatus = controller.cancelled ? "cancelled" : (pending.length ? "paused" : "completed");
       await localDb("updateRun", { serverRunId: manifest.serverRunId, patch: { status: finalStatus } });
 
+      if (currentActiveRun) {
+        currentActiveRun.completed = true;
+        currentActiveRun.finishedAt = Date.now();
+        currentActiveRun.status = finalStatus;
+        renderMiniBar();
+      }
+
       try {
         chrome.runtime.sendMessage({
           type: "KOCVIP_PROGRESS_UPDATE",
@@ -1047,6 +1098,12 @@
     } catch (err) {
       emitLog(`[KOCVIP Run LỖI] Ngoại lệ executeRun: ${err.message}`, true);
       await localDb("updateRun", { serverRunId: manifest.serverRunId, patch: { status: "failed", error: String(err?.message || err) } });
+      if (currentActiveRun) {
+        currentActiveRun.completed = true;
+        currentActiveRun.finishedAt = Date.now();
+        currentActiveRun.status = "failed";
+        renderMiniBar();
+      }
     } finally {
       activeRuns.delete(manifest.serverRunId);
     }
@@ -1424,7 +1481,460 @@
     }
   });
 
-  function showModal() {
+  // =========================================================================
+  // MINI BAR QUẢN LÝ TIẾN TRÌNH CHẠY NGẦM (100% LOCAL TRÊN TIKTOK)
+  // =========================================================================
+  let currentActiveRun = null;
+  let miniBarEl = null;
+  let miniBarTimer = null;
+
+  function formatNumberVN(num) {
+    return Number(num || 0).toLocaleString("vi-VN");
+  }
+
+  function formatStopwatch(ms) {
+    const totalSec = Math.floor(Math.max(0, ms) / 1000);
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    const p = n => String(n).padStart(2, "0");
+    if (hrs > 0) return `${p(hrs)}:${p(mins)}:${p(secs)}`;
+    return `${p(mins)}:${p(secs)}`;
+  }
+
+  function ensureMiniBar() {
+    if (!isExtensionValid()) return null;
+    let mb = document.getElementById("kocvip-inpage-minibar");
+    if (mb) return mb;
+
+    let savedTop = "64px";
+    let savedRight = "260px";
+    try {
+      const st = localStorage.getItem("kocvip_minibar_top");
+      const sr = localStorage.getItem("kocvip_minibar_right");
+      if (st) savedTop = st;
+      if (sr) savedRight = sr;
+    } catch {}
+
+    mb = document.createElement("div");
+    mb.id = "kocvip-inpage-minibar";
+    mb.style.cssText = `
+      position: fixed !important;
+      top: ${savedTop} !important;
+      right: ${savedRight} !important;
+      bottom: auto !important;
+      left: auto !important;
+      z-index: 2147483647 !important;
+      background: #ffffff !important;
+      border: 1.5px solid #cbd5e1 !important;
+      border-radius: 12px !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.03) !important;
+      color: #0f172a !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+      padding: 10px 14px !important;
+      width: 320px !important;
+      box-sizing: border-box !important;
+      display: none;
+      flex-direction: column !important;
+      gap: 7px !important;
+      user-select: none !important;
+      cursor: grab !important;
+      transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
+    `;
+
+    mb.innerHTML = `
+      <style>
+        @keyframes kocvipPulseGlow {
+          0%, 100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(225,29,72,0.4)); }
+          50% { transform: scale(1.12); filter: drop-shadow(0 0 6px rgba(225,29,72,0.8)); }
+        }
+        .kocvip-mb-pulse-icon {
+          display: inline-block;
+          animation: kocvipPulseGlow 1.8s infinite ease-in-out;
+        }
+        .kocvip-mb-btn {
+          background: #f1f5f9;
+          border: 1px solid #cbd5e1;
+          color: #334155;
+          padding: 4px 8px;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+        .kocvip-mb-btn:hover {
+          background: #e2e8f0;
+          border-color: #94a3b8;
+          color: #0f172a;
+        }
+        .kocvip-mb-btn.danger {
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          color: #dc2626;
+        }
+        .kocvip-mb-btn.danger:hover {
+          background: #fee2e2;
+          border-color: #f87171;
+          color: #b91c1c;
+        }
+        .kocvip-mb-btn.primary {
+          background: #fff1f2;
+          border: 1px solid #fecdd3;
+          color: #e11d48;
+        }
+        .kocvip-mb-btn.primary:hover {
+          background: #ffe4e6;
+          border-color: #fda4af;
+          color: #be123c;
+        }
+      </style>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px;">
+          <span id="kocvip-mb-icon" class="kocvip-mb-pulse-icon">🚀</span>
+          <span id="kocvip-mb-title" style="color: #0f172a;">Đang mời KOC...</span>
+        </div>
+        <span id="kocvip-mb-timer" style="font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 2px 7px; border-radius: 5px; border: 1px solid #cbd5e1;">⏱️ 00:00</span>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #64748b;">
+        <span id="kocvip-mb-count" style="font-weight: 500;">0/0 KOC (Nhóm 0/0)</span>
+        <span id="kocvip-mb-pct" style="font-weight: 700; color: #e11d48;">0%</span>
+      </div>
+
+      <div style="width: 100%; height: 5px; background: #e2e8f0; border-radius: 999px; overflow: hidden;">
+        <div id="kocvip-mb-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #ec4899, #f43f5e); transition: width 0.3s ease;"></div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1px;">
+        <span id="kocvip-mb-stats" style="font-size: 11px; color: #64748b; font-weight: 500;">✅ 0  •  ⚠️ 0  •  ❌ 0</span>
+        <div id="kocvip-mb-actions" style="display: flex; gap: 5px;">
+          <button type="button" class="kocvip-mb-btn" id="kocvip-mb-btn-pause" title="Tạm dừng đợt mời">⏸️</button>
+          <button type="button" class="kocvip-mb-btn danger" id="kocvip-mb-btn-stop" title="Hủy đợt mời">⏹️</button>
+          <button type="button" class="kocvip-mb-btn primary" id="kocvip-mb-btn-expand" title="Mở to bảng điều khiển">↗ Mở to</button>
+          <button type="button" class="kocvip-mb-btn" id="kocvip-mb-btn-close" title="Đóng thanh mini" style="display: none;">✕</button>
+        </div>
+      </div>
+    `;
+
+    // Hỗ trợ kéo thả (drag & drop) thanh mini bar và lưu vị trí
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let initialTop = 0, initialRight = 0;
+    let hasMoved = false;
+
+    mb.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button") || e.target.closest(".kocvip-mb-btn")) return;
+      isDragging = true;
+      hasMoved = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = mb.getBoundingClientRect();
+      initialTop = rect.top;
+      initialRight = window.innerWidth - rect.right;
+      mb.style.cursor = "grabbing";
+
+      const onMouseMove = (ev) => {
+        if (!isDragging) return;
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          hasMoved = true;
+        }
+        let newTop = initialTop + dy;
+        let newRight = initialRight - dx;
+
+        newTop = Math.max(10, Math.min(window.innerHeight - 80, newTop));
+        newRight = Math.max(10, Math.min(window.innerWidth - 340, newRight));
+
+        mb.style.top = `${newTop}px`;
+        mb.style.right = `${newRight}px`;
+        mb.style.bottom = "auto";
+        mb.style.left = "auto";
+      };
+
+      const onMouseUp = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        mb.style.cursor = "grab";
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        if (hasMoved) {
+          try {
+            localStorage.setItem("kocvip_minibar_top", mb.style.top);
+            localStorage.setItem("kocvip_minibar_right", mb.style.right);
+          } catch {}
+        }
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    });
+
+    mb.addEventListener("mouseenter", () => {
+      mb.style.boxShadow = "0 14px 28px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.08)";
+    });
+    mb.addEventListener("mouseleave", () => {
+      mb.style.boxShadow = "0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.03)";
+    });
+
+    mb.addEventListener("click", (e) => {
+      if (hasMoved) {
+        hasMoved = false;
+        return;
+      }
+      if (e.target.closest("button") || e.target.closest(".kocvip-mb-btn")) return;
+      showModal(currentActiveRun?.serverRunId);
+    });
+
+    mb.querySelector("#kocvip-mb-btn-expand")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showModal(currentActiveRun?.serverRunId);
+    });
+
+    mb.querySelector("#kocvip-mb-btn-pause")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!currentActiveRun) return;
+      const controller = activeRuns.get(currentActiveRun.serverRunId);
+      const isPaused = controller?.paused || currentActiveRun.status === "paused";
+      if (isPaused) {
+        if (controller) {
+          controller.paused = false;
+          kickedRuns.add(currentActiveRun.serverRunId);
+        }
+        currentActiveRun.status = "running";
+        localDb("updateRun", { serverRunId: currentActiveRun.serverRunId, patch: { paused: false, status: "running" } });
+        try {
+          chrome.runtime.sendMessage({
+            type: "KOCVIP_INVITE_CONTROL",
+            payload: { action: "resume", serverRunId: currentActiveRun.serverRunId }
+          });
+        } catch {}
+      } else {
+        if (controller) controller.paused = true;
+        currentActiveRun.status = "paused";
+        localDb("updateRun", { serverRunId: currentActiveRun.serverRunId, patch: { paused: true, status: "paused" } });
+        try {
+          chrome.runtime.sendMessage({
+            type: "KOCVIP_INVITE_CONTROL",
+            payload: { action: "pause", serverRunId: currentActiveRun.serverRunId }
+          });
+        } catch {}
+      }
+      renderMiniBar();
+    });
+
+    mb.querySelector("#kocvip-mb-btn-stop")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!currentActiveRun) return;
+      const ok = confirm("Bạn có chắc chắn muốn HỦY đợt mời KOC này?");
+      if (!ok) return;
+      const controller = activeRuns.get(currentActiveRun.serverRunId);
+      if (controller) {
+        controller.cancelled = true;
+        controller.paused = false;
+      }
+      currentActiveRun.status = "cancelled";
+      localDb("cancelRun", { serverRunId: currentActiveRun.serverRunId });
+      try {
+        chrome.runtime.sendMessage({
+          type: "KOCVIP_INVITE_CONTROL",
+          payload: { action: "stop", serverRunId: currentActiveRun.serverRunId }
+        });
+      } catch {}
+      renderMiniBar();
+    });
+
+    mb.querySelector("#kocvip-mb-btn-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideMiniBar(true);
+    });
+
+    (document.body || document.documentElement).appendChild(mb);
+    miniBarEl = mb;
+    return mb;
+  }
+
+  function renderMiniBar() {
+    if (!currentActiveRun) {
+      if (miniBarEl) miniBarEl.style.display = "none";
+      return;
+    }
+
+    const mb = ensureMiniBar();
+    if (!mb) return;
+
+    const isModalOpen = overlayHost && overlayHost.style.display === "flex";
+    if (isModalOpen) {
+      mb.style.display = "none";
+      return;
+    }
+    mb.style.display = "flex";
+
+    const elTitle = mb.querySelector("#kocvip-mb-title");
+    const elIcon = mb.querySelector("#kocvip-mb-icon");
+    const elTimer = mb.querySelector("#kocvip-mb-timer");
+    const elCount = mb.querySelector("#kocvip-mb-count");
+    const elPct = mb.querySelector("#kocvip-mb-pct");
+    const elFill = mb.querySelector("#kocvip-mb-bar-fill");
+    const elStats = mb.querySelector("#kocvip-mb-stats");
+    const btnPause = mb.querySelector("#kocvip-mb-btn-pause");
+    const btnStop = mb.querySelector("#kocvip-mb-btn-stop");
+    const btnClose = mb.querySelector("#kocvip-mb-btn-close");
+
+    const total = currentActiveRun.totalRecipients || 0;
+    const sent = currentActiveRun.sent || 0;
+    const skipped = currentActiveRun.skipped || 0;
+    const failed = currentActiveRun.failed || 0;
+    const processed = sent + skipped + failed;
+    const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+    const isCompleted = currentActiveRun.completed || currentActiveRun.status === "completed" || currentActiveRun.status === "cancelled";
+    const isPaused = currentActiveRun.status === "paused";
+
+    if (elTimer && currentActiveRun.startedAt) {
+      const elapsed = isCompleted && currentActiveRun.finishedAt 
+        ? currentActiveRun.finishedAt - currentActiveRun.startedAt 
+        : Date.now() - currentActiveRun.startedAt;
+      elTimer.textContent = `⏱️ ${formatStopwatch(elapsed)}`;
+    }
+
+    if (isCompleted) {
+      if (elIcon) {
+        elIcon.textContent = currentActiveRun.status === "cancelled" ? "⏹️" : "🎉";
+        elIcon.className = "";
+      }
+      if (elTitle) {
+        elTitle.textContent = currentActiveRun.status === "cancelled" ? "Đã hủy đợt mời" : "Đã xong đợt mời!";
+        elTitle.style.color = currentActiveRun.status === "cancelled" ? "#dc2626" : "#16a34a";
+      }
+      if (mb) {
+        mb.style.borderColor = currentActiveRun.status === "cancelled" ? "#fca5a5" : "#86efac";
+      }
+      if (elFill) {
+        elFill.style.background = currentActiveRun.status === "cancelled" ? "#ef4444" : "#22c55e";
+        elFill.style.width = "100%";
+      }
+      if (elPct) {
+        elPct.style.color = currentActiveRun.status === "cancelled" ? "#dc2626" : "#16a34a";
+      }
+      if (elTimer) {
+        elTimer.style.color = currentActiveRun.status === "cancelled" ? "#dc2626" : "#16a34a";
+        elTimer.style.background = currentActiveRun.status === "cancelled" ? "#fef2f2" : "#f0fdf4";
+        elTimer.style.borderColor = currentActiveRun.status === "cancelled" ? "#fecaca" : "#bbf7d0";
+      }
+      if (btnPause) btnPause.style.display = "none";
+      if (btnStop) btnStop.style.display = "none";
+      if (btnClose) btnClose.style.display = "inline-flex";
+    } else if (isPaused) {
+      if (elIcon) {
+        elIcon.textContent = "⏸️";
+        elIcon.className = "";
+      }
+      if (elTitle) {
+        elTitle.textContent = "Đang tạm dừng";
+        elTitle.style.color = "#d97706";
+      }
+      if (mb) {
+        mb.style.borderColor = "#fcd34d";
+      }
+      if (elPct) {
+        elPct.style.color = "#d97706";
+      }
+      if (elTimer) {
+        elTimer.style.color = "#b45309";
+        elTimer.style.background = "#fffbeb";
+        elTimer.style.borderColor = "#fde68a";
+      }
+      if (btnPause) {
+        btnPause.textContent = "▶️";
+        btnPause.title = "Tiếp tục đợt mời";
+        btnPause.style.display = "inline-flex";
+      }
+      if (btnStop) btnStop.style.display = "inline-flex";
+      if (btnClose) btnClose.style.display = "none";
+    } else {
+      if (elIcon) {
+        elIcon.textContent = "🚀";
+        elIcon.className = "kocvip-mb-pulse-icon";
+      }
+      if (elTitle) {
+        elTitle.textContent = "Đang mời KOC...";
+        elTitle.style.color = "#0f172a";
+      }
+      if (mb) {
+        mb.style.borderColor = "#cbd5e1";
+      }
+      if (elPct) {
+        elPct.style.color = "#e11d48";
+      }
+      if (elTimer) {
+        elTimer.style.color = "#475569";
+        elTimer.style.background = "#f1f5f9";
+        elTimer.style.borderColor = "#cbd5e1";
+      }
+      if (elFill) {
+        elFill.style.background = "linear-gradient(90deg, #ec4899, #f43f5e)";
+        elFill.style.width = `${pct}%`;
+      }
+      if (btnPause) {
+        btnPause.textContent = "⏸️";
+        btnPause.title = "Tạm dừng đợt mời";
+        btnPause.style.display = "inline-flex";
+      }
+      if (btnStop) btnStop.style.display = "inline-flex";
+      if (btnClose) btnClose.style.display = "none";
+    }
+
+    if (elCount) {
+      const curChunk = currentActiveRun.currentChunkIndex || 1;
+      const totChunk = currentActiveRun.totalChunks || 1;
+      elCount.textContent = `${formatNumberVN(processed)}/${formatNumberVN(total)} KOC (Nhóm ${curChunk}/${totChunk})`;
+    }
+    if (elPct) {
+      elPct.textContent = `${pct}%`;
+    }
+    if (elStats) {
+      elStats.innerHTML = `✅ ${formatNumberVN(sent)}  •  ⚠️ ${formatNumberVN(skipped)}  •  ❌ ${formatNumberVN(failed)}`;
+    }
+  }
+
+  function startMiniBarTimer() {
+    if (miniBarTimer) clearInterval(miniBarTimer);
+    miniBarTimer = setInterval(() => {
+      if (!currentActiveRun) {
+        clearInterval(miniBarTimer);
+        return;
+      }
+      const isCompleted = currentActiveRun.completed || currentActiveRun.status === "completed" || currentActiveRun.status === "cancelled";
+      if (!isCompleted && currentActiveRun.status !== "paused") {
+        const elTimer = document.getElementById("kocvip-mb-timer");
+        if (elTimer && currentActiveRun.startedAt) {
+          elTimer.textContent = `⏱️ ${formatStopwatch(Date.now() - currentActiveRun.startedAt)}`;
+        }
+      }
+    }, 1000);
+  }
+
+  function showMiniBar() {
+    if (currentActiveRun) {
+      renderMiniBar();
+      startMiniBarTimer();
+    }
+  }
+
+  function hideMiniBar(dismiss = false) {
+    if (dismiss) currentActiveRun = null;
+    if (miniBarEl) miniBarEl.style.display = "none";
+    if (miniBarTimer && dismiss) {
+      clearInterval(miniBarTimer);
+      miniBarTimer = null;
+    }
+  }
+
+  function showModal(targetRunId) {
     if (!isExtensionValid()) {
       alert("Tiện ích Mời KOC VIP vừa được cập nhật.\n\nVui lòng tải lại trang TikTok (ấn F5 hoặc Cmd+R) để mở bảng điều khiển!");
       location.reload();
@@ -1432,13 +1942,27 @@
     }
     initInPageOverlay();
     if (overlayHost) {
-      if (overlayIframe && (!overlayIframe.src || overlayIframe.src === "about:blank")) {
-        overlayIframe.src = safeGetURL("ui/index.html");
+      const runId = targetRunId || currentActiveRun?.serverRunId;
+      const targetUrl = safeGetURL(runId ? `ui/index.html?runId=${encodeURIComponent(runId)}` : "ui/index.html");
+      if (overlayIframe) {
+        if (!overlayIframe.src || overlayIframe.src === "about:blank" || (runId && !overlayIframe.src.includes(runId))) {
+          overlayIframe.src = targetUrl;
+        } else if (runId && overlayIframe.contentWindow) {
+          try {
+            overlayIframe.contentWindow.postMessage({ type: "KOCVIP_OPEN_RUN", serverRunId: runId }, "*");
+          } catch {}
+        }
+      }
+      if (runId) {
+        try {
+          chrome.storage.local.set({ kocvip_active_run_id: runId, kocvip_last_run_id: runId });
+        } catch {}
       }
       const isSavedMax = localStorage.getItem("kocvip_is_maximized") === "true";
       toggleMaximize(isSavedMax);
       overlayHost.style.display = "flex";
       document.body.style.overflow = "hidden";
+      hideMiniBar(false);
     }
   }
 
@@ -1446,6 +1970,9 @@
     if (overlayHost) {
       overlayHost.style.display = "none";
       document.body.style.overflow = "";
+    }
+    if (currentActiveRun && !currentActiveRun.dismissed) {
+      showMiniBar();
     }
   }
 

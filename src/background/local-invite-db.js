@@ -254,7 +254,14 @@ export async function saveCatalogProducts(shopId, products = []) {
       imageUrl: p.imageUrl || p.image || "",
       price: p.price || 0,
       stock: p.stock || 0,
+      sales: p.sales || 0,
+      orders28d: p.orders28d || 0,
+      allTimeSales: p.allTimeSales || 0,
+      revenue: p.revenue || 0,
+      gmv28d: p.gmv28d || 0,
       commissionRate: p.commissionRate || 10,
+      skus: Array.isArray(p.skus) ? p.skus : [],
+      isOnline: p.isOnline !== false,
       updatedAt: now,
     });
   }
@@ -267,7 +274,52 @@ export async function getCatalogProducts(shopId) {
   const tx = db.transaction("catalogProducts", "readonly");
   const store = tx.objectStore("catalogProducts");
   const index = store.index("shopId");
-  return requestResult(index.getAll(IDBKeyRange.only(shopId)));
+  const list = await requestResult(index.getAll(IDBKeyRange.only(shopId)));
+  if (Array.isArray(list)) {
+    list.sort((a, b) => (b.sales || 0) - (a.sales || 0));
+  }
+  return list || [];
+}
+
+export async function getExportableKocs(payload = {}) {
+  const { serverRunId, shopId, status } = payload;
+  const db = await openLocalInviteDb();
+  let chunks = [];
+
+  if (serverRunId) {
+    chunks = await listChunks(serverRunId);
+  } else if (shopId) {
+    const tx = db.transaction(["runs", "chunks"], "readonly");
+    const runStore = tx.objectStore("runs");
+    const runIndex = runStore.index("shopId");
+    const runs = await requestResult(runIndex.getAll(IDBKeyRange.only(shopId)));
+    const runIds = new Set((runs || []).map(r => r.serverRunId));
+    const chunkStore = tx.objectStore("chunks");
+    const allChunks = await requestResult(chunkStore.getAll());
+    chunks = (allChunks || []).filter(c => runIds.has(c.serverRunId));
+  } else {
+    const tx = db.transaction("chunks", "readonly");
+    const chunkStore = tx.objectStore("chunks");
+    chunks = await requestResult(chunkStore.getAll());
+  }
+
+  const kocs = [];
+  for (const chunk of chunks) {
+    for (const r of chunk.recipients || []) {
+      if (status && status !== "all" && r.status !== status) {
+        continue;
+      }
+      kocs.push({
+        creatorOecId: r.creatorOecId || "",
+        handle: r.handle || "",
+        nickName: r.nickName || "",
+        status: r.status || "pending",
+        reason: r.reason || r.msg || (r.status === "sent" ? "Đã gửi lời mời thành công" : ""),
+        updatedAt: r.updatedAt || chunk.updatedAt || new Date().toISOString(),
+      });
+    }
+  }
+  return kocs;
 }
 
 // Router tiếp nhận yêu cầu thao tác DB từ Content Script hoặc Side Panel
@@ -296,7 +348,10 @@ export async function handleLocalInviteDbOperation(payload = {}) {
       return saveCatalogProducts(payload.shopId, payload.products);
     case "getCatalogProducts":
       return getCatalogProducts(payload.shopId);
+    case "getExportableKocs":
+      return getExportableKocs(payload);
     default:
       throw new Error(`Unsupported DB op: ${op}`);
   }
 }
+

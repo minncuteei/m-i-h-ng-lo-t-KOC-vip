@@ -242,6 +242,9 @@
               📁 Nạp file
               <input type="file" id="kocDrawerFileInput" accept=".xlsx, .xls, .csv, .txt" hidden>
             </label>
+            <button type="button" id="btnExportPastKocs" class="secondary-button-sm" title="Xuất toàn bộ KOC đã mời trong lịch sử ra Excel">
+              📊 Xuất KOC đã mời
+            </button>
             <button type="button" id="btnDrawerClear" class="danger-button-sm">
               🗑️ Xóa
             </button>
@@ -260,9 +263,14 @@
     <!-- Execution Panel (Tiến trình gửi lời mời) -->
     <div id="executionPanel" class="execution-panel" hidden>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h2 style="font-size: 16px; font-weight: 700;">🚀 Tiến trình gửi lời mời KOC VIP</h2>
-        <div style="display: flex; gap: 8px;">
-          <button type="button" id="btnExportDebug" class="secondary-button-sm" title="Xuất toàn bộ Run và Chunks từ IndexedDB ra JSON">📁 Xuất debug</button>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h2 style="font-size: 16px; font-weight: 700;">🚀 Tiến trình gửi lời mời KOC VIP</h2>
+          <span id="execStopwatchBadge" class="stopwatch-badge" title="Thời gian chạy thực tế">⏱️ 00:00:00</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button type="button" id="btnExportKocExcel" class="secondary-button-sm" title="Xuất danh sách KOC đợt này ra file Excel (.xlsx)" style="background: #ecfdf5; border-color: #a7f3d0; color: #047857; font-weight: 600;">📊 Xuất Excel</button>
+          <button type="button" id="btnCopyKocText" class="secondary-button-sm" title="Sao chép danh sách KOC dạng text" style="font-weight: 600;">📋 Copy KOC</button>
+          <button type="button" id="btnExportDebug" class="secondary-button-sm" title="Xuất toàn bộ Run và Chunks từ IndexedDB ra JSON">📁 Debug</button>
           <button type="button" id="btnExecPause" class="secondary-button-sm">Tạm dừng</button>
           <button type="button" id="btnExecResume" class="secondary-button-sm" hidden>Tiếp tục</button>
           <button type="button" id="btnExecStop" class="danger-button solid" style="padding: 4px 12px; font-size: 12px;">Hủy bỏ</button>
@@ -297,6 +305,12 @@
           <span id="execProgressStatus">Đang chuẩn bị...</span>
           <span id="execProgressPercent">0%</span>
         </div>
+      </div>
+
+      <!-- Top lý do KOC không thành công / bỏ qua (Chuẩn UX Booking) -->
+      <div id="execTopReasonsBox" class="top-reasons-box" hidden>
+        <div class="top-reasons-title">📌 Thống kê lý do KOC không thành công / bỏ qua:</div>
+        <ul id="execTopReasonsList" class="top-reasons-list"></ul>
       </div>
 
       <div class="execution-log" id="execLogContent">

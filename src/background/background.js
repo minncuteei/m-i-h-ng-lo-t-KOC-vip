@@ -5,6 +5,9 @@
  */
 import { handleLocalInviteDbOperation, saveCatalogProducts, getCatalogProducts } from './local-invite-db.js';
 
+// Bộ nhớ đệm danh mục sản phẩm theo shopId
+const catalogProductsCache = new Map();
+
 async function ensureScriptsInTab(tabId) {
   if (!tabId) return false;
 
@@ -173,9 +176,63 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         throw new Error("Chưa mở tab TikTok Shop Affiliate (affiliate.tiktok.com). Hãy mở tab TikTok và đăng nhập.");
       }
 
+      let tabShopId = "";
+      try {
+        const tab = await chrome.tabs.get(targetTabId);
+        if (tab?.url) {
+          const u = new URL(tab.url);
+          tabShopId = u.searchParams.get("shop_id") || u.searchParams.get("shopId") || u.searchParams.get("oec_seller_id") || "";
+        }
+      } catch {}
+
       const requestedPage = Number(payload.page || 1);
       const pageSize = Number(payload.pageSize || 50);
       const keyword = String(payload.keyword || "").trim();
+      const forceRefresh = Boolean(payload.force);
+      const shopId = String(payload.shopId || tabShopId || "default").trim();
+
+      // NẾU KHÔNG YÊU CẦU QUÉT LẠI (force !== true) VÀ ĐÃ CÓ BỘ NHỚ ĐỆM CỦA SHOP NÀY:
+      if (!forceRefresh && !keyword) {
+        // 1. Kiểm tra memory cache
+        if (catalogProductsCache.has(shopId)) {
+          const cachedEntry = catalogProductsCache.get(shopId);
+          if (cachedEntry && Array.isArray(cachedEntry.products) && cachedEntry.products.length > 0) {
+            console.log(`[KOC VIP] Trả về ${cachedEntry.products.length} sản phẩm từ Memory Cache cho shop: ${shopId}`);
+            return {
+              products: cachedEntry.products,
+              total: cachedEntry.total || cachedEntry.products.length,
+              page: 1,
+              pageSize,
+              shopName: cachedEntry.shopName || "",
+              fromCache: true,
+              shopId,
+            };
+          }
+        }
+
+        // 2. Kiểm tra IndexedDB Cache
+        const dbProducts = await getCatalogProducts(shopId).catch(() => []);
+        if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+          console.log(`[KOC VIP] Trả về ${dbProducts.length} sản phẩm từ IndexedDB Cache cho shop: ${shopId}`);
+          const saved = await chrome.storage.local.get(["kocvip_shop_name"]);
+          const shopName = saved?.kocvip_shop_name || "";
+          catalogProductsCache.set(shopId, {
+            products: dbProducts,
+            total: dbProducts.length,
+            shopName,
+            cachedAt: Date.now(),
+          });
+          return {
+            products: dbProducts,
+            total: dbProducts.length,
+            page: 1,
+            pageSize,
+            shopName,
+            fromCache: true,
+            shopId,
+          };
+        }
+      }
 
       // Quét các trang sản phẩm (tự động gom nhiều trang để lấy trọn vẹn danh mục)
       let allRawProducts = [];
@@ -371,12 +428,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return (b.stock || 0) - (a.stock || 0);
       });
 
-      const shopId = payload.shopId || "default";
       await saveCatalogProducts(shopId, products);
+      catalogProductsCache.set(shopId, {
+        products,
+        total: products.length,
+        shopName: detectedShopName,
+        cachedAt: Date.now(),
+      });
       if (detectedShopName) {
-        await chrome.storage.local.set({ kocvip_shop_name: detectedShopName });
+        await chrome.storage.local.set({ kocvip_shop_name: detectedShopName, kocvip_last_shop_id: shopId });
       }
-      return { products, total: products.length, page: 1, pageSize, shopName: detectedShopName };
+      return { products, total: products.length, page: 1, pageSize, shopName: detectedShopName, fromCache: false, shopId };
     })()
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: String(err?.message || err) }));

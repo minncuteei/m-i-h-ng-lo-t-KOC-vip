@@ -892,3 +892,51 @@ input:focus, select:focus, textarea:focus {
 .log-line.warning {
   color: #FBBF24;
 }
+
+.stopwatch-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--brand);
+  background: rgba(235, 39, 90, 0.1);
+  border: 1px solid rgba(235, 39, 90, 0.25);
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.top-reasons-box {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.top-reasons-box[hidden] {
+  display: none !important;
+}
+.top-reasons-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.top-reasons-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.top-reasons-list li {
+  line-height: 1.4;
+}
+.top-reasons-list li b {
+  color: var(--text);
+}
