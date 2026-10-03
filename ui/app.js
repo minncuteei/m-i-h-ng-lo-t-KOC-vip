@@ -9,6 +9,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const dailyLimitBadge = document.getElementById("dailyLimitBadge");
   const btnClose = document.getElementById("btnClose");
   const btnMinimize = document.getElementById("btnMinimize");
+  const btnMaximize = document.getElementById("btnMaximize");
   const btnOpenNewTab = document.getElementById("btnOpenNewTab");
   const btnCancel = document.getElementById("btnCancel");
 
@@ -115,10 +116,45 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let currentShopName = "";
 
-  // 2. Khởi tạo & Phục hồi Cấu hình đã lưu (Persistence Toàn Diện)
   function generateDefaultTitle(customShop) {
     const shop = (customShop || currentShopName || "Hannah Seyo").trim();
     return `${shop} x nhatminh`;
+  }
+
+  // Cấu trúc đặt tên chuẩn: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_03/10_001)
+  function formatInvitationGroupName(baseTitle, index) {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dateStr = `${dd}/${mm}`;
+    const idxStr = String(index).padStart(3, "0");
+    let clean = String(baseTitle || generateDefaultTitle()).trim();
+    clean = clean.replace(/_\d{2}\/\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").replace(/_TEST$/i, "").trim();
+    return `${clean}_${dateStr}_${idxStr}`;
+  }
+
+  // Quản lý Hạn mức 24h Thông minh (Reset lúc 00:00 mỗi ngày)
+  async function getDailyQuota() {
+    const today = new Date().toISOString().split("T")[0];
+    const stored = await chrome.storage.local.get(["kocvip_daily_quota"]);
+    const quota = stored?.kocvip_daily_quota;
+    if (!quota || quota.date !== today) {
+      const fresh = { date: today, sentKocCount: 0, sentGroupCount: 0, recordedRuns: [] };
+      await chrome.storage.local.set({ kocvip_daily_quota: fresh });
+      return fresh;
+    }
+    return quota;
+  }
+
+  function formatNumberVN(num) {
+    return Number(num || 0).toLocaleString("vi-VN");
+  }
+
+  function updateDailyLimitBadge(quota) {
+    if (!dailyLimitBadge) return;
+    const kocCount = quota?.sentKocCount || 0;
+    const groupCount = quota?.sentGroupCount || 0;
+    dailyLimitBadge.textContent = `Hạn mức 24h: ${formatNumberVN(kocCount)}/10.000 (${formatNumberVN(groupCount)}/200 nhóm)`;
   }
 
   function setQuickExpiryDays(days) {
@@ -186,8 +222,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       if (s.contentType) selectContentType.value = s.contentType;
-      if (s.commission !== undefined && s.commission !== "") inputCommission.value = s.commission;
-      if (s.adsCommission !== undefined && s.adsCommission !== "") inputAdsCommission.value = s.adsCommission;
+      if (s.commission !== undefined && s.commission !== "") {
+        inputCommission.value = s.commission;
+      } else {
+        inputCommission.value = "8";
+      }
+      if (s.adsCommission !== undefined && s.adsCommission !== "") {
+        inputAdsCommission.value = s.adsCommission;
+      } else {
+        inputAdsCommission.value = "2";
+      }
       if (s.shareAfter !== undefined) chkShareAfter.checked = !!s.shareAfter;
       
       // Mặc định Zalo: 0943102588
@@ -233,6 +277,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       setQuickExpiryDays(7); // Mặc định 1 tuần theo yêu cầu
       saveSettings();
     }
+    getDailyQuota().then(updateDailyLimitBadge);
     updatePreview();
   });
 
@@ -394,7 +439,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    productListContainer.innerHTML = products.map(p => {
+    productListContainer.innerHTML = products.map((p, idx) => {
       const isSelected = selectedProductIds.has(p.productId);
       const priceText = p.price ? `${Number(p.price).toLocaleString("vi-VN")}₫` : "0₫";
       const stockText = Number(p.stock || 0).toLocaleString("vi-VN");
@@ -412,6 +457,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       return `
         <label class="invite-product-row ${isSelected ? 'selected' : ''}" data-id="${p.productId}">
+          <span class="product-stt">${idx + 1}</span>
           <input type="checkbox" class="product-item-chk" value="${p.productId}" ${isSelected ? 'checked' : ''}>
           ${p.imageUrl ? `<img src="${p.imageUrl}" alt="" loading="lazy">` : `<div class="invite-product-image-placeholder">📦</div>`}
           <div class="product-row-info">
@@ -483,7 +529,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         price: 0,
         stock: 999,
         sales: 9999,
-        commissionRate: Number(inputCommission.value || 10),
+        commissionRate: Number(inputCommission.value || 8),
       });
     }
     selectedProductIds.add(pid);
@@ -504,7 +550,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
       previewProductsCount.textContent = `Đã chọn ${selectedList.length}/100 sản phẩm:`;
       previewProductList.innerHTML = selectedList.map((p, idx) => `
-        <li><b>${idx + 1}.</b> ${escapeHtml(p.title)} <span style="color: var(--brand); font-weight: 600;">(HH: ${p.commissionRate || 10}%)</span></li>
+        <li><b>${idx + 1}.</b> ${escapeHtml(p.title)} <span style="color: var(--brand); font-weight: 600;">(HH: ${p.commissionRate || 8}%)</span></li>
       `).join("");
     }
   }
@@ -701,8 +747,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const total = kocList.length;
     const chunkCount = Math.ceil(total / 50);
 
-    chipKocCount.textContent = `${total} KOC ▾`;
-    kocDrawerStats.innerHTML = `Tổng nhận diện: <b>${total}</b> KOC • Dự kiến: <b>${chunkCount}</b> nhóm (tối đa 50 KOC/nhóm)`;
+    chipKocCount.textContent = `${formatNumberVN(total)} KOC ▾`;
+    kocDrawerStats.innerHTML = `Tổng nhận diện: <b>${formatNumberVN(total)}</b> KOC • Dự kiến: <b>${formatNumberVN(chunkCount)}</b> nhóm (tối đa 50 KOC/nhóm)`;
   }
 
   function normalizeDrawerText() {
@@ -808,7 +854,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     if (!kocList.length) {
-      alert("Chưa có danh sách KOC. Hãy bấm '📋 Bảng tổng KOC' để dán ID hoặc Username.");
+      alert("Chưa có danh sách KOC. Hãy bấm '📋 Nhập KOC' để dán ID hoặc Username.");
       kocDrawerOverlay.hidden = false;
       return;
     }
@@ -837,13 +883,13 @@ document.addEventListener("DOMContentLoaded", async () => {
               title: inputTitle.value.trim() || generateDefaultTitle(),
               expiresAt: inputExpiresAt.value,
               contentPreference: selectContentType.value,
-              commission: Number(inputCommission.value || 10),
-              adsCommission: Number(inputAdsCommission.value || 1),
+              commission: Number(inputCommission.value || 8),
+              adsCommission: Number(inputAdsCommission.value || 2),
               products: selectedProducts.map(p => ({
                 productId: p.productId,
                 title: p.title,
-                target_commission: Math.round(Number(inputCommission.value || 10) * 100),
-                target_ads_commission: Math.round(Number(inputAdsCommission.value || 1) * 100),
+                target_commission: Math.round(Number(inputCommission.value || 8) * 100),
+                target_ads_commission: Math.round(Number(inputAdsCommission.value || 2) * 100),
               })),
               recipients: targetChunk,
               tuXuLyTrung: chkResolveConflict.checked,
@@ -878,7 +924,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (!kocList.length) {
-      alert("Chưa có KOC nào. Hãy bấm '📋 Bảng tổng KOC' để dán ít nhất 1 ID KOC.");
+      alert("Chưa có KOC nào. Hãy bấm '📋 Nhập KOC' để dán ít nhất 1 ID KOC.");
       kocDrawerOverlay.hidden = false;
       return;
     }
@@ -954,8 +1000,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         title: testGroupName,
         expiresAt: inputExpiresAt.value,
         contentPreference: selectContentType.value,
-        commission: Number(inputCommission.value || 10),
-        adsCommission: Number(inputAdsCommission.value || 1),
+        commission: Number(inputCommission.value || 8),
+        adsCommission: Number(inputAdsCommission.value || 2),
         shareAfterInvite: false,
         zalo: inputZalo.value.trim(),
         facebook: inputFacebook.value.trim(),
@@ -966,8 +1012,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         products: selectedProducts.map(p => ({
           productId: p.productId,
           title: p.title,
-          target_commission: Math.round(Number(inputCommission.value || 10) * 100),
-          target_ads_commission: Math.round(Number(inputAdsCommission.value || 1) * 100),
+          target_commission: Math.round(Number(inputCommission.value || 8) * 100),
+          target_ads_commission: Math.round(Number(inputAdsCommission.value || 2) * 100),
         })),
         recipients: recipient,
       },
@@ -1012,7 +1058,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (!kocList.length) {
-      alert("Chưa có danh sách KOC nào. Hãy bấm '📋 Bảng tổng KOC' để dán ID hoặc Username KOC.");
+      alert("Chưa có danh sách KOC nào. Hãy bấm '📋 Nhập KOC' để dán ID hoặc Username KOC.");
       kocDrawerOverlay.hidden = false;
       return;
     }
@@ -1082,7 +1128,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     for (let i = 0; i < allRecipients.length; i += chunkSize) {
       const batch = allRecipients.slice(i, i + chunkSize);
       const chunkIndex = Math.floor(i / chunkSize) + 1;
-      const groupName = totalChunks > 1 ? `${baseTitle}_N${chunkIndex}` : `${baseTitle}_N1`;
+      const groupName = formatInvitationGroupName(baseTitle, chunkIndex);
       chunks.push({
         chunkId: `${runId}_c${chunkIndex}`,
         serverRunId: runId,
@@ -1103,8 +1149,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         title: campaignTitle,
         expiresAt: inputExpiresAt.value,
         contentPreference: selectContentType.value,
-        commission: Number(inputCommission.value || 10),
-        adsCommission: Number(inputAdsCommission.value || 1),
+        commission: Number(inputCommission.value || 8),
+        adsCommission: Number(inputAdsCommission.value || 2),
         shareAfterInvite: chkShareAfter.checked,
         zalo: inputZalo.value.trim(),
         facebook: inputFacebook.value.trim(),
@@ -1115,8 +1161,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         products: selectedProducts.map(p => ({
           productId: p.productId,
           title: p.title,
-          target_commission: Math.round(Number(inputCommission.value || 10) * 100),
-          target_ads_commission: Math.round(Number(inputAdsCommission.value || 1) * 100),
+          target_commission: Math.round(Number(inputCommission.value || 8) * 100),
+          target_ads_commission: Math.round(Number(inputAdsCommission.value || 2) * 100),
         })),
         recipients: allRecipients,
       },
@@ -1251,22 +1297,36 @@ document.addEventListener("DOMContentLoaded", async () => {
             }
           }
 
-          mSent.textContent = sent;
-          mSkipped.textContent = skipped;
-          mFailed.textContent = failed;
-          mReset.textContent = waiting;
+          mSent.textContent = formatNumberVN(sent);
+          mSkipped.textContent = formatNumberVN(skipped);
+          mFailed.textContent = formatNumberVN(failed);
+          mReset.textContent = formatNumberVN(waiting);
 
           const processed = sent + skipped + failed;
           const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
           execProgressBar.style.width = `${pct}%`;
           execProgressPercent.textContent = `${pct}%`;
-          execProgressStatus.textContent = completed ? "Đã hoàn thành đợt mời" : `Đang xử lý (${processed}/${total})`;
+          execProgressStatus.textContent = completed ? "Đã hoàn thành đợt mời" : `Đang xử lý (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
 
           if (completed) {
-            appendExecLog(`Hoàn tất đợt mời! Thành công: ${sent} • Bỏ qua/trùng: ${skipped} • Lỗi: ${failed} • Chờ reset: ${waiting}`);
+            appendExecLog(`Hoàn tất đợt mời! Thành công: ${formatNumberVN(sent)} • Bỏ qua/trùng: ${formatNumberVN(skipped)} • Lỗi: ${formatNumberVN(failed)} • Chờ reset: ${formatNumberVN(waiting)}`);
             btnExecPause.hidden = true;
             btnExecResume.hidden = true;
             btnExecClose.hidden = false;
+
+            if (currentRunId && sent > 0) {
+              getDailyQuota().then(async quota => {
+                quota.recordedRuns = quota.recordedRuns || [];
+                if (!quota.recordedRuns.includes(currentRunId)) {
+                  quota.recordedRuns.push(currentRunId);
+                  quota.sentKocCount = (quota.sentKocCount || 0) + sent;
+                  const successfulGroups = chunks.filter(c => (c.recipients || []).some(r => r.status === "sent")).length;
+                  quota.sentGroupCount = (quota.sentGroupCount || 0) + (successfulGroups || 1);
+                  await chrome.storage.local.set({ kocvip_daily_quota: quota });
+                  updateDailyLimitBadge(quota);
+                }
+              });
+            }
           }
         } catch {}
       })();
@@ -1275,6 +1335,33 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Window Controls
+  let isMaximized = false;
+  function updateMaximizeButtonState(maximized) {
+    isMaximized = !!maximized;
+    if (!btnMaximize) return;
+    btnMaximize.title = isMaximized ? "Thu nhỏ lại kích thước chuẩn" : "Phóng to toàn màn hình";
+    btnMaximize.innerHTML = isMaximized
+      ? `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="10" height="10" rx="1.5"></rect><path d="M4 12H2.5A1.5 1.5 0 0 1 1 10.5V2.5A1.5 1.5 0 0 1 2.5 1h8A1.5 1.5 0 0 1 12 2.5V4"></path></svg>`
+      : `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"></rect></svg>`;
+  }
+
+  if (btnMaximize) {
+    btnMaximize.addEventListener("click", () => {
+      const next = !isMaximized;
+      updateMaximizeButtonState(next);
+      window.parent.postMessage({ type: "KOCVIP_TOGGLE_MAXIMIZE", isMaximized: next }, "*");
+      try {
+        localStorage.setItem("kocvip_is_maximized", next ? "true" : "false");
+      } catch {}
+    });
+  }
+
+  try {
+    if (localStorage.getItem("kocvip_is_maximized") === "true") {
+      updateMaximizeButtonState(true);
+    }
+  } catch {}
+
   btnClose.addEventListener("click", () => {
     window.parent.postMessage({ type: "KOCVIP_CLOSE_OVERLAY" }, "*");
     if (window.top === window) window.close();

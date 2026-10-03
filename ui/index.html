@@ -15,6 +15,11 @@
         <p id="inviteLimitHint">Kiểm tra an toàn trước khi gửi. Mỗi lời mời dùng 50 KOC và tối đa 100 sản phẩm.</p>
       </div>
       <div class="heading-actions">
+        <button class="icon-button" type="button" id="btnMaximize" title="Phóng to toàn màn hình">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="12" height="12" rx="2"></rect>
+          </svg>
+        </button>
         <button class="icon-button" type="button" id="btnMinimize" title="Thu nhỏ popup">−</button>
         <button class="icon-button" type="button" id="btnClose" title="Đóng">×</button>
       </div>
@@ -26,13 +31,13 @@
         <span>Đã chọn</span> <strong id="chipKocCount">0 KOC ▾</strong>
       </button>
       <button type="button" id="btnOpenKocPool" class="chip-btn">
-        📋 Bảng tổng KOC / Nhập KOC
+        📋 Nhập KOC
       </button>
       <div id="tabStatusBadge" class="status-badge checking">
         <span class="dot"></span>
         <span class="text">Đang dò tab TikTok...</span>
       </div>
-      <span class="daily-limit-badge" id="dailyLimitBadge">Hạn mức 24h: 0/200 nhóm</span>
+      <span class="daily-limit-badge" id="dailyLimitBadge">Hạn mức 24h: 0/10.000 (0/200 nhóm)</span>
       <button type="button" id="btnOpenNewTab" class="icon-button" title="Mở tab riêng toàn màn hình">⤢</button>
     </div>
 
@@ -79,11 +84,11 @@
         <div class="commission-row">
           <label>
             <span>Thường (%)</span>
-            <input type="number" id="inputCommission" value="10" min="1" max="99">
+            <input type="number" id="inputCommission" value="8" min="1" max="99">
           </label>
           <label>
             <span>Ads (%)</span>
-            <input type="number" id="inputAdsCommission" value="1" min="0" max="99">
+            <input type="number" id="inputAdsCommission" value="2" min="0" max="99">
           </label>
           <label class="inline-check" style="margin-bottom: 6px;">
             <input type="checkbox" id="chkShareAfter">
@@ -227,22 +232,22 @@
           <button type="button" id="btnCloseKocDrawer" class="icon-button">×</button>
         </div>
         <p style="font-size: 12px; color: var(--text-muted);">
-          Dán danh sách ID KOC tại đây (hỗ trợ copy từ Excel, Google Sheets, file CSV, @username, link TikTok, ID số... tiện ích sẽ tự động lọc sạch ID):
+          Dán danh sách KOC (Excel, Sheets, CSV, @username, link TikTok, ID số):
         </p>
         <textarea id="kocDrawerText" class="koc-textarea" placeholder="minhdz&#10;bepthongminh009&#10;@thuy_tieen22051999&#10;7495837291823719283"></textarea>
         
         <div class="koc-drawer-actions">
           <div style="display: flex; gap: 8px; align-items: center;">
             <label class="secondary-button-sm" style="cursor: pointer;">
-              📁 Nạp File KOC (Excel / CSV / TXT)
+              📁 Nạp file
               <input type="file" id="kocDrawerFileInput" accept=".xlsx, .xls, .csv, .txt" hidden>
             </label>
             <button type="button" id="btnDrawerClear" class="danger-button-sm">
-              🗑️ Xóa danh sách
+              🗑️ Xóa
             </button>
           </div>
           <button type="button" id="btnDrawerSave" class="primary-button">
-            Xong & Áp dụng
+            Xong
           </button>
         </div>
 
@@ -300,7 +305,7 @@
     </div>
   </div>
 
-  <script src="xlsx.mini.min.js"></script>
+  <script src="xlsx.full.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

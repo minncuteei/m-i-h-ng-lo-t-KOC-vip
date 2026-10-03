@@ -192,16 +192,37 @@
     };
   }
 
-  // DÁN NGUYÊN VĂN tenNhomTheoLan()
-  // Tên nhóm chuẩn hóa - không bao giờ nối _N1_N1
+  function formatFriendlyError(code, rawMsg) {
+    const msg = String(rawMsg || "").toLowerCase();
+    if (code === 16024016 || msg.includes("linked with a shop account")) {
+      return "Bỏ qua (do KOC là tài khoản liên kết Shop khác, TikTok không cho gửi lời mời Affiliate)";
+    }
+    if (code === 16024034 || code === 16024035 || msg.includes("reach the upper limit") || msg.includes("quota")) {
+      return "Tạm dừng (do Shop đã dùng hết hạn mức 200 nhóm/ngày của TikTok, chờ 0h reset)";
+    }
+    if (code === 16024002 || msg.includes("duplicate") || msg.includes("already exist")) {
+      return "Bị lỗi (do tên nhóm đã tồn tại trên TikTok, hệ thống đang tự động đổi tên)";
+    }
+    if (code === 98001004 || msg.includes("invalid param") || msg.includes("verify your input")) {
+      return "Bị lỗi (do KOC cài đặt chặn lời mời hoặc tài khoản bị giới hạn tiếp thị)";
+    }
+    if (code === 50001702 || msg.includes("unavailable creator or product")) {
+      return "Bị lỗi (do sản phẩm đính kèm đã hết hàng hoặc KOC không đủ điều kiện)";
+    }
+    return `Bị lỗi (do TikTok phản hồi: ${rawMsg || "Lỗi tham số"})`;
+  }
+
+  // Tên nhóm chuẩn hóa: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_03/10_001)
   function tenNhomTheoLan(groupName, soNhom) {
     const ten = String(groupName || "").trim();
+    if (/_\d{2}\/\d{2}_\d{3}$/.test(ten)) return ten;
     const lan = Math.max(1, Number(soNhom || 1));
-    const cleanTen = ten.replace(/_N\d+$/i, "");
-    if (lan <= 1) return cleanTen;
-    const duoiThem = `_N${lan}`;
-    if (cleanTen.length + duoiThem.length <= 30) return cleanTen + duoiThem;
-    return cleanTen.slice(0, 30 - duoiThem.length) + duoiThem;
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const cleanTen = ten.replace(/_\d{2}\/\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").trim();
+    const idxStr = String(lan).padStart(3, "0");
+    return `${cleanTen}_${dd}/${mm}_${idxStr}`;
   }
 
   // DỰNG BODY CREATE KHỚP 100% HAR ENTRY 137 (TUYỆT ĐỐI KHÔNG CÓ has_flash_sale)
@@ -243,13 +264,13 @@
             if (!comm && (product.commissionRate || draft.commission)) {
               comm = Math.round(Number(product.commissionRate || draft.commission) * 100);
             }
-            if (!comm) comm = 1000;
+            if (!comm) comm = 800;
 
             let adsComm = Number(product.target_ads_commission || product.adsCommissionBps || 0);
             if (!adsComm && draft.adsCommission) {
               adsComm = Math.round(Number(draft.adsCommission) * 100);
             }
-            if (!adsComm) adsComm = 100;
+            if (!adsComm && adsComm !== 0) adsComm = 200;
 
             return {
               product_id: String(product.productId || product.product_id || "").trim(),
@@ -279,13 +300,13 @@
             if (!comm && (product.commissionRate || draft.commission)) {
               comm = Math.round(Number(product.commissionRate || draft.commission) * 100);
             }
-            if (!comm) comm = 1000;
+            if (!comm) comm = 800;
 
             let adsComm = Number(product.target_ads_commission || product.adsCommissionBps || 0);
             if (!adsComm && draft.adsCommission) {
               adsComm = Math.round(Number(draft.adsCommission) * 100);
             }
-            if (!adsComm) adsComm = 100;
+            if (!adsComm && adsComm !== 0) adsComm = 200;
 
             return {
               product_id: String(product.productId || product.product_id || "").trim(),
@@ -505,14 +526,8 @@
           }
         }
 
-        emitLog(`[KOCVIP API] conflict_check thành công (HTTP 200, Code 0). Phát hiện trùng: ${conflictIds.size} KOC.`);
         if (conflictIds.size > 0) {
-          for (const cid of conflictIds) {
-            const info = conflictInfoMap.get(cid);
-            const creatorDisplay = info?.userName ? `@${info.userName} (${cid})` : cid;
-            const groupDisplay = info?.oldGroupName ? `nhóm "${info.oldGroupName}"` : `nhóm ID ${info?.oldGroupId || "cũ"}`;
-            emitLog(`[KOCVIP TRÙNG] KOC ${creatorDisplay} đang có lời mời hiệu lực tại ${groupDisplay}.`);
-          }
+          emitLog(`[KOCVIP] Phát hiện ${conflictIds.size} KOC đang có lời mời hiệu lực tại nhóm khác.`);
         }
       }
     } catch (err) {
@@ -724,9 +739,12 @@
         let startIndex = 0;
 
         // Bước 1: Tìm KOC hợp lệ đầu tiên để tạo nhóm chính (1 nhóm duy nhất cho cả chunk)
+        let consecutiveParamErrors = 0;
         for (let i = 0; i < pending.length; i++) {
           const firstKoc = pending[i];
-          const firstBody = buildCreateBody(manifest.draft || {}, [firstKoc], tenNhom);
+          // Dùng tên nhóm phân nhánh an toàn để TikTok không từ chối trùng tên nhóm (Mã 98001004)
+          const isolatedGroupName = `${tenNhom}_a${i + 1}`;
+          const firstBody = buildCreateBody(manifest.draft || {}, [firstKoc], isolatedGroupName);
           const firstKocName = firstKoc.handle ? `@${firstKoc.handle}` : firstKoc.creatorOecId;
 
           try {
@@ -750,7 +768,7 @@
             if (sCode === 0 && sGid) {
               mainGroupId = sGid;
               startIndex = i + 1;
-              emitLog(`[KOCVIP TẠO NHÓM THÀNH CÔNG] Đã tạo nhóm chính "${tenNhom}" (Group ID: ${mainGroupId}) với KOC ${firstKocName}!`);
+              emitLog(`[KOCVIP TẠO NHÓM THÀNH CÔNG] Đã tạo nhóm chính "${isolatedGroupName}" (Group ID: ${mainGroupId}) với KOC ${firstKocName}!`);
               recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: mainGroupId } : r);
               break;
             } else if (sCode === 16024016 || (firstRes?.body?.message || "").toLowerCase().includes("linked with a shop account")) {
@@ -758,8 +776,14 @@
               recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
             } else {
               const sErr = firstRes?.body?.message || firstRes?.error || "Lỗi tạo lời mời";
-              emitLog(`[KOCVIP] KOC ${firstKocName} lỗi (Code ${sCode}): ${sErr}`, true);
-              recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "failed", `Mã ${sCode}: ${sErr}`) : r);
+              const friendly = formatFriendlyError(sCode, sErr);
+              emitLog(`[KOCVIP] KOC ${firstKocName}: ${friendly}`, true);
+              recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "failed", friendly) : r);
+              if (sCode === 98001004) consecutiveParamErrors++;
+              if (consecutiveParamErrors >= 3) {
+                emitLog(`[KOCVIP CẢNH BÁO] TikTok từ chối tham số nhóm liên tiếp 3 lần -> Tạm dừng tạo lẻ để tránh khóa hạn mức.`);
+                break;
+              }
             }
           } catch (eFirst) {
             emitLog(`[KOCVIP] KOC ${firstKocName} ngoại lệ: ${eFirst.message}`, true);
@@ -796,15 +820,16 @@
               const addCode = Number(addRes?.body?.code ?? (addRes?.httpStatus === 200 ? 0 : addRes?.httpStatus ?? -1));
 
               if (addCode === 0) {
-                emitLog(`[KOCVIP GOM NHÓM] Đã thêm KOC ${nextKocName} vào nhóm "${tenNhom}" thành công!`);
+                emitLog(`[KOCVIP GOM NHÓM] Đã thêm KOC ${nextKocName} vào nhóm thành công!`);
                 recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: mainGroupId } : r);
               } else if (addCode === 16024016 || (addRes?.body?.message || "").toLowerCase().includes("linked with a shop account")) {
                 emitLog(`[KOCVIP ĐÃ XÁC ĐỊNH] KOC ${nextKocName} là tài khoản liên kết Shop (Mã 16024016) -> Bỏ qua.`);
                 recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
               } else {
                 const aErr = addRes?.body?.message || addRes?.error || "Lỗi thêm KOC vào nhóm";
-                emitLog(`[KOCVIP] KOC ${nextKocName} lỗi (Code ${addCode}): ${aErr}`, true);
-                recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "failed", `Mã ${addCode}: ${aErr}`) : r);
+                const friendly = formatFriendlyError(addCode, aErr);
+                emitLog(`[KOCVIP] KOC ${nextKocName}: ${friendly}`, true);
+                recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "failed", friendly) : r);
               }
             } catch (eAdd) {
               emitLog(`[KOCVIP] KOC ${nextKocName} ngoại lệ: ${eAdd.message}`, true);
@@ -1078,6 +1103,36 @@
         const page = Number(payload.page || payload.page_number || payload.cur_page || 1);
         const pageSize = Number(payload.pageSize || payload.page_size || 50);
         const keyword = String(payload.keyword || "").trim();
+
+        // 1. Thử gọi API chuẩn Quản lý sản phẩm Shop (Seller Center) để lấy đúng Tab "Trên kệ" (131 sản phẩm)
+        try {
+          const sellerRes = await executeInPage({
+            method: "GET",
+            path: "/api/v1/product/local/products/list",
+            query: {
+              tab_id: "2", // BẮT BUỘC: Tab "Trên kệ"
+              page_number: String(page),
+              page_size: String(pageSize),
+              product_sort_fields: "15", // Hiệu suất bán chạy nhất
+              product_sort_types: "0",   // Giảm dần
+              sku_number: "1",
+              is_need_target_stock: "true",
+              same_product_page_size: "3",
+              is_need_clearance_tag: "true",
+              ...(keyword ? { keyword, product_name: keyword } : {}),
+            },
+          });
+
+          if (sellerRes?.ok && Number(sellerRes?.body?.code ?? -1) === 0 && (sellerRes?.body?.data?.products || sellerRes?.body?.data?.total_product_count !== undefined)) {
+            console.log("[KOC VIP] Lấy sản phẩm thành công từ API Seller Shop (Trên kệ):", sellerRes.body.data);
+            sendResponse({ success: true, result: sellerRes?.body || sellerRes });
+            return;
+          }
+        } catch (eSeller) {
+          console.warn("[KOC VIP] Gọi API Seller chưa được, chuyển sang fallback Affiliate:", eSeller);
+        }
+
+        // 2. Fallback sang cổng Affiliate nếu trang không phải Seller Shop
         const searchParams = keyword ? [{ key: 1, search_type: 1, value: keyword }] : [];
         const body = {
           cur_page: page,
@@ -1165,15 +1220,31 @@
 
       overlayIframe = document.createElement("iframe");
       overlayIframe.src = safeGetURL("ui/index.html");
-      overlayIframe.style.cssText = `
-        width: min(1380px, 98vw);
-        height: min(94vh, 920px);
-        border: 0;
-        border-radius: 14px;
-        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45);
-        background: #FFFFFF;
-        overflow: hidden;
-      `;
+      const isSavedMax = localStorage.getItem("kocvip_is_maximized") === "true";
+      if (isSavedMax) {
+        overlayIframe.dataset.maximized = "true";
+        overlayIframe.style.cssText = `
+          width: 100vw;
+          height: 100vh;
+          max-width: 100vw;
+          max-height: 100vh;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+          background: #FFFFFF;
+          overflow: hidden;
+        `;
+      } else {
+        overlayIframe.style.cssText = `
+          width: min(1560px, 98vw);
+          height: min(96vh, 950px);
+          border: 0;
+          border-radius: 14px;
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45);
+          background: #FFFFFF;
+          overflow: hidden;
+        `;
+      }
 
       overlayHost.appendChild(overlayIframe);
       (document.body || document.documentElement).appendChild(overlayHost);
@@ -1319,10 +1390,37 @@
     }
   }
 
-  // Lắng nghe đóng / thu nhỏ từ bên trong iframe
+  // Phóng to toàn màn hình TikTok hoặc thu nhỏ về kích thước chuẩn
+  function toggleMaximize(forceState) {
+    if (!overlayIframe || !overlayHost) return;
+    const shouldMax = forceState !== undefined ? !!forceState : !overlayIframe.dataset.maximized;
+    if (shouldMax) {
+      overlayIframe.dataset.maximized = "true";
+      overlayIframe.style.width = "100vw";
+      overlayIframe.style.height = "100vh";
+      overlayIframe.style.maxWidth = "100vw";
+      overlayIframe.style.maxHeight = "100vh";
+      overlayIframe.style.borderRadius = "0";
+      overlayHost.style.padding = "0";
+      try { localStorage.setItem("kocvip_is_maximized", "true"); } catch {}
+    } else {
+      delete overlayIframe.dataset.maximized;
+      overlayIframe.style.width = "min(1560px, 98vw)";
+      overlayIframe.style.height = "min(96vh, 950px)";
+      overlayIframe.style.maxWidth = "";
+      overlayIframe.style.maxHeight = "";
+      overlayIframe.style.borderRadius = "14px";
+      overlayHost.style.padding = "";
+      try { localStorage.setItem("kocvip_is_maximized", "false"); } catch {}
+    }
+  }
+
+  // Lắng nghe đóng / thu nhỏ / phóng to từ bên trong iframe
   window.addEventListener("message", (e) => {
     if (e.data?.type === "KOCVIP_CLOSE_OVERLAY" || e.data?.type === "KOCVIP_MINIMIZE_OVERLAY") {
       hideModal();
+    } else if (e.data?.type === "KOCVIP_TOGGLE_MAXIMIZE") {
+      toggleMaximize(e.data.isMaximized);
     }
   });
 
@@ -1337,6 +1435,8 @@
       if (overlayIframe && (!overlayIframe.src || overlayIframe.src === "about:blank")) {
         overlayIframe.src = safeGetURL("ui/index.html");
       }
+      const isSavedMax = localStorage.getItem("kocvip_is_maximized") === "true";
+      toggleMaximize(isSavedMax);
       overlayHost.style.display = "flex";
       document.body.style.overflow = "hidden";
     }

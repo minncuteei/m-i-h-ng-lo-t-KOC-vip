@@ -78,6 +78,9 @@ async function injectAllOpenTikTokTabs() {
         "https://affiliate-us.tiktok.com/*",
         "https://affiliate.tiktokglobalshop.com/*",
         "https://affiliate.tiktokshopglobalselling.com/*",
+        "https://seller-vn.tiktok.com/*",
+        "https://seller.tiktok.com/*",
+        "https://seller-us.tiktok.com/*",
       ]
     });
     for (const tab of tabs) {
@@ -99,7 +102,7 @@ if (chrome.runtime.onInstalled) {
 // Mở UI rộng kiểu Modal in-page hoặc Tab mới (thay thế Side Panel hẹp)
 chrome.action.onClicked.addListener(async (tab) => {
   try {
-    if (tab?.id && tab.url && tab.url.includes("affiliate.tiktok.com")) {
+    if (tab?.id && tab.url && (tab.url.includes("affiliate.tiktok.com") || tab.url.includes("seller-vn.tiktok.com"))) {
       await ensureScriptsInTab(tab.id);
       const resp = await chrome.tabs.sendMessage(tab.id, { type: "KOCVIP_TOGGLE_MODAL" }, { frameId: 0 }).catch(() => null);
       if (resp?.success) return;
@@ -115,6 +118,9 @@ async function findTikTokTab() {
       "https://affiliate-us.tiktok.com/*",
       "https://affiliate.tiktokglobalshop.com/*",
       "https://affiliate.tiktokshopglobalselling.com/*",
+      "https://seller-vn.tiktok.com/*",
+      "https://seller.tiktok.com/*",
+      "https://seller-us.tiktok.com/*",
     ]
   });
   const sorted = tabs.filter(t => !t.discarded).sort((a, b) => (Number(!!b.active) - Number(!!a.active)));

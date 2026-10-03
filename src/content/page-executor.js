@@ -20,6 +20,7 @@
     ["/api/v1/affiliate/account/info_v2", "GET"],
     ["/api/v1/affiliate/backend/category/get", "GET"],
     ["/api/v1/affiliate/product_selection/list", "POST"],
+    ["/api/v1/product/local/products/list", "GET"],
     ["/api/v1/oec/affiliate/crm/creator/import_check", "POST"],
     ["/api/v1/oec/affiliate/seller/invitation_group/create", "POST"],
     ["/api/v1/oec/affiliate/seller/invitation_group/creators_add", "POST"],
@@ -147,6 +148,14 @@
     validateShopContext(request);
     const url = new URL(path, window.location.origin);
     addCommonQuery(url, request);
+
+    if (request.query && typeof request.query === "object") {
+      Object.entries(request.query).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") {
+          url.searchParams.set(k, String(v));
+        }
+      });
+    }
 
     if (request.noShopInject) {
       url.searchParams.delete("oec_seller_id");

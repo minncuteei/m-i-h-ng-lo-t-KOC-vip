@@ -45,13 +45,12 @@ html, body {
 .modal-window {
   display: flex;
   flex-direction: column;
-  width: min(1380px, 98vw);
-  height: min(94vh, 920px);
-  margin: 1.5vh auto;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 20px 45px -10px rgba(15, 23, 42, 0.15), 0 0 1px rgba(0, 0, 0, 0.1);
+  border: none;
+  border-radius: inherit;
   overflow: hidden;
 }
 
@@ -455,6 +454,27 @@ input:focus, select:focus, textarea:focus {
   background: var(--brand-soft);
 }
 
+.product-stt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+}
+.invite-product-row.selected .product-stt {
+  background: var(--brand);
+  color: #FFFFFF;
+  border-color: var(--brand);
+}
+
 .invite-product-row img {
   width: 44px;
   height: 44px;
@@ -729,15 +749,16 @@ input:focus, select:focus, textarea:focus {
 }
 
 .drawer-panel {
-  width: min(600px, 90vw);
+  width: min(880px, 94vw);
+  max-width: 900px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  padding: 16px 20px;
+  padding: 18px 22px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 .drawer-header {
   display: flex;
@@ -752,10 +773,11 @@ input:focus, select:focus, textarea:focus {
 }
 
 .koc-textarea {
-  height: 180px;
+  min-height: 320px;
+  max-height: 55vh;
   font-family: monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
   resize: vertical;
 }
 
