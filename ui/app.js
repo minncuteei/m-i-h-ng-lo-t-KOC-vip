@@ -54,8 +54,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnCloseKocDrawer = document.getElementById("btnCloseKocDrawer");
   const kocDrawerText = document.getElementById("kocDrawerText");
   const kocDrawerFileInput = document.getElementById("kocDrawerFileInput");
-  const btnDrawerLookup = document.getElementById("btnDrawerLookup");
   const btnDrawerSave = document.getElementById("btnDrawerSave");
+  const btnDrawerClear = document.getElementById("btnDrawerClear");
   const kocDrawerStats = document.getElementById("kocDrawerStats");
   const chipKocCount = document.getElementById("chipKocCount");
 
@@ -698,21 +698,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     const raw = kocDrawerText.value || "";
     kocList = parseKocInputData(raw);
 
-    const oecCount = kocList.filter(k => !!k.creatorOecId).length;
-    const handleCount = kocList.filter(k => !k.creatorOecId && !!k.handle).length;
     const total = kocList.length;
     const chunkCount = Math.ceil(total / 50);
 
     chipKocCount.textContent = `${total} KOC ▾`;
-    kocDrawerStats.innerHTML = `Tổng nhận diện: <b>${total}</b> KOC (<b>${oecCount}</b> đã có OEC ID, <b>${handleCount}</b> username sẽ tự tra cứu) • Dự kiến: <b>${chunkCount}</b> nhóm`;
+    kocDrawerStats.innerHTML = `Tổng nhận diện: <b>${total}</b> KOC • Dự kiến: <b>${chunkCount}</b> nhóm (tối đa 50 KOC/nhóm)`;
   }
 
   function normalizeDrawerText() {
     if (!kocList.length) return;
     const lines = kocList.map(k => {
-      if (k.creatorOecId && k.handle) return `${k.handle}\t${k.creatorOecId}`;
-      if (k.creatorOecId) return k.creatorOecId;
-      return k.handle;
+      if (k.handle) return k.handle.startsWith("@") ? k.handle : `@${k.handle}`;
+      return k.creatorOecId;
     });
     kocDrawerText.value = lines.join("\n");
   }
@@ -743,6 +740,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     kocDrawerOverlay.hidden = true;
     saveSettings();
   });
+
+  if (btnDrawerClear) {
+    btnDrawerClear.addEventListener("click", () => {
+      if (!kocDrawerText.value.trim()) return;
+      if (confirm("Bạn có chắc chắn muốn xóa toàn bộ danh sách KOC hiện tại không?")) {
+        kocDrawerText.value = "";
+        kocDrawerFileInput.value = "";
+        updateKocListFromText();
+        saveSettings();
+        kocDrawerText.focus();
+      }
+    });
+  }
 
   // Nạp Excel (.xlsx / .xls) / CSV / TXT
   kocDrawerFileInput.addEventListener("change", (e) => {
@@ -784,54 +794,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         e.target.value = "";
       };
       reader.readAsText(file);
-    }
-  });
-
-  // Tra cứu Username -> OEC ID qua import_check
-  btnDrawerLookup.addEventListener("click", async () => {
-    const handlesToLookup = kocList.filter(k => !k.creatorOecId && !!k.handle).map(k => k.handle);
-    if (!handlesToLookup.length) {
-      alert("Tất cả KOC trong danh sách đã có OEC ID hoặc danh sách đang rỗng.");
-      return;
-    }
-    if (!activeTikTokTab) {
-      alert("Vui lòng mở tab TikTok Affiliate trước khi tra cứu.");
-      return;
-    }
-
-    btnDrawerLookup.disabled = true;
-    btnDrawerLookup.textContent = `⏳ Đang tra cứu ${handlesToLookup.length} usernames...`;
-
-    try {
-      const res = await chrome.runtime.sendMessage({
-        type: "KOCVIP_LOOKUP_HANDLES",
-        payload: { handles: handlesToLookup },
-      });
-
-      if (!res?.success) throw new Error(res?.error || "Tra cứu thất bại");
-      const { verified, notFound } = res.data || { verified: [], notFound: [] };
-
-      const foundMap = new Map(verified.map(v => [v.handle.toLowerCase(), v.creatorOecId]));
-      kocList.forEach(k => {
-        if (!k.creatorOecId && k.handle && foundMap.has(k.handle.toLowerCase())) {
-          k.creatorOecId = foundMap.get(k.handle.toLowerCase());
-        }
-      });
-
-      normalizeDrawerText();
-      updateKocListFromText();
-      saveSettings();
-
-      let msg = `Tìm thấy ${verified.length}/${handlesToLookup.length} ID hợp lệ!`;
-      if (notFound.length) {
-        msg += `\nKhông tìm thấy ${notFound.length} handles: ${notFound.slice(0, 5).join(", ")}${notFound.length > 5 ? "..." : ""}`;
-      }
-      alert(msg);
-    } catch (err) {
-      alert(`Lỗi tra cứu: ${err.message}`);
-    } finally {
-      btnDrawerLookup.disabled = false;
-      btnDrawerLookup.textContent = "🔍 Tra cứu Username";
     }
   });
 

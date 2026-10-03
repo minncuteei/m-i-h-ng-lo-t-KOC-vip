@@ -719,57 +719,104 @@
           return { state: "settled" };
         }
 
-        emitLog(`[KOCVIP TỰ ĐỘNG CÔ LẬP] Phát hiện KOC liên kết Shop trong nhóm ${pending.length} KOC. Đang tự động tách từng KOC để loại trừ KOC lỗi và cứu các KOC còn lại...`);
-        let anySuccess = false;
-        let lastCreatedGroupId = "";
+        emitLog(`[KOCVIP TỰ ĐỘNG CÔ LẬP] Phát hiện KOC liên kết Shop trong nhóm ${pending.length} KOC. Đang tự động gom toàn bộ KOC hợp lệ vào 1 nhóm duy nhất...`);
+        let mainGroupId = "";
+        let startIndex = 0;
 
-        for (let pIdx = 0; pIdx < pending.length; pIdx++) {
-          const singleKoc = pending[pIdx];
-          const singleName = tenNhomTheoLan(`${chunk.groupName}_${pIdx + 1}`, chunk.soNhomDaMo || 1);
-          const singleBody = buildCreateBody(manifest.draft || {}, [singleKoc], singleName);
-          const kocName = singleKoc.handle ? `@${singleKoc.handle}` : singleKoc.creatorOecId;
+        // Bước 1: Tìm KOC hợp lệ đầu tiên để tạo nhóm chính (1 nhóm duy nhất cho cả chunk)
+        for (let i = 0; i < pending.length; i++) {
+          const firstKoc = pending[i];
+          const firstBody = buildCreateBody(manifest.draft || {}, [firstKoc], tenNhom);
+          const firstKocName = firstKoc.handle ? `@${firstKoc.handle}` : firstKoc.creatorOecId;
 
           try {
-            const singleRes = await callTikTok({
+            const firstRes = await callTikTok({
               method: "POST",
               path: "/api/v1/oec/affiliate/seller/invitation_group/create",
               shopId,
               shopRegion: region,
-              body: singleBody,
+              body: firstBody,
             });
 
-            const sCode = Number(singleRes?.body?.code ?? (singleRes?.httpStatus === 200 ? 0 : singleRes?.httpStatus ?? -1));
+            const sCode = Number(firstRes?.body?.code ?? (firstRes?.httpStatus === 200 ? 0 : firstRes?.httpStatus ?? -1));
             const sGid = String(
-              singleRes?.body?.data?.invitation?.id ||
-              singleRes?.body?.data?.invitation_group_id ||
-              singleRes?.body?.invitation_group_id ||
-              singleRes?.body?.data?.id ||
+              firstRes?.body?.data?.invitation?.id ||
+              firstRes?.body?.data?.invitation_group_id ||
+              firstRes?.body?.invitation_group_id ||
+              firstRes?.body?.data?.id ||
               ""
             );
 
             if (sCode === 0 && sGid) {
-              anySuccess = true;
-              lastCreatedGroupId = sGid;
-              emitLog(`[KOCVIP CỨU THÀNH CÔNG] KOC ${kocName} gửi lời mời thành công! (Group ID: ${sGid})`);
-              recipients = recipients.map(r => r.creatorOecId === singleKoc.creatorOecId ? { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: sGid } : r);
-            } else if (sCode === 16024016 || (singleRes?.body?.message || "").toLowerCase().includes("linked with a shop account")) {
-              emitLog(`[KOCVIP ĐÃ XÁC ĐỊNH] KOC ${kocName} chính là tài khoản liên kết Shop (Mã 16024016) -> Bỏ qua an toàn.`);
-              recipients = recipients.map(r => r.creatorOecId === singleKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
+              mainGroupId = sGid;
+              startIndex = i + 1;
+              emitLog(`[KOCVIP TẠO NHÓM THÀNH CÔNG] Đã tạo nhóm chính "${tenNhom}" (Group ID: ${mainGroupId}) với KOC ${firstKocName}!`);
+              recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: mainGroupId } : r);
+              break;
+            } else if (sCode === 16024016 || (firstRes?.body?.message || "").toLowerCase().includes("linked with a shop account")) {
+              emitLog(`[KOCVIP ĐÃ XÁC ĐỊNH] KOC ${firstKocName} là tài khoản liên kết Shop (Mã 16024016) -> Bỏ qua.`);
+              recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
             } else {
-              const sErr = singleRes?.body?.message || singleRes?.error || "Lỗi tạo lời mời";
-              emitLog(`[KOCVIP] KOC ${kocName} lỗi (Code ${sCode}): ${sErr}`, true);
-              recipients = recipients.map(r => r.creatorOecId === singleKoc.creatorOecId ? recipientStatusPatch(r, "failed", `Mã ${sCode}: ${sErr}`) : r);
+              const sErr = firstRes?.body?.message || firstRes?.error || "Lỗi tạo lời mời";
+              emitLog(`[KOCVIP] KOC ${firstKocName} lỗi (Code ${sCode}): ${sErr}`, true);
+              recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "failed", `Mã ${sCode}: ${sErr}`) : r);
             }
-          } catch (eSingle) {
-            emitLog(`[KOCVIP] KOC ${kocName} ngoại lệ: ${eSingle.message}`, true);
-            recipients = recipients.map(r => r.creatorOecId === singleKoc.creatorOecId ? recipientStatusPatch(r, "failed", eSingle.message) : r);
+          } catch (eFirst) {
+            emitLog(`[KOCVIP] KOC ${firstKocName} ngoại lệ: ${eFirst.message}`, true);
+            recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "failed", eFirst.message) : r);
           }
-          await sleep(400);
+          await sleep(350);
         }
 
-        const chunkStatus = anySuccess ? "sent" : "settled";
-        await localDb("saveChunk", { manifest, chunk, patch: { status: chunkStatus, groupId: lastCreatedGroupId, recipients } });
-        return { state: chunkStatus, groupId: lastCreatedGroupId };
+        // Bước 2: Thêm tất cả các KOC còn lại vào ĐÚNG NHÓM CHÍNH ĐÃ TẠO (creators_add), không tạo thêm nhóm mới!
+        if (mainGroupId && startIndex < pending.length) {
+          for (let pIdx = startIndex; pIdx < pending.length; pIdx++) {
+            const nextKoc = pending[pIdx];
+            const nextKocName = nextKoc.handle ? `@${nextKoc.handle}` : nextKoc.creatorOecId;
+
+            try {
+              const addRes = await callTikTok({
+                method: "POST",
+                path: "/api/v1/oec/affiliate/seller/invitation_group/creators_add",
+                shopId,
+                shopRegion: region,
+                body: {
+                  invitation_group_id: String(mainGroupId),
+                  invitation_id: String(mainGroupId),
+                  creator_id_list: [
+                    {
+                      base_info: {
+                        creator_oec_id: String(nextKoc.creatorOecId),
+                      }
+                    }
+                  ],
+                },
+              });
+
+              const addCode = Number(addRes?.body?.code ?? (addRes?.httpStatus === 200 ? 0 : addRes?.httpStatus ?? -1));
+
+              if (addCode === 0) {
+                emitLog(`[KOCVIP GOM NHÓM] Đã thêm KOC ${nextKocName} vào nhóm "${tenNhom}" thành công!`);
+                recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: mainGroupId } : r);
+              } else if (addCode === 16024016 || (addRes?.body?.message || "").toLowerCase().includes("linked with a shop account")) {
+                emitLog(`[KOCVIP ĐÃ XÁC ĐỊNH] KOC ${nextKocName} là tài khoản liên kết Shop (Mã 16024016) -> Bỏ qua.`);
+                recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
+              } else {
+                const aErr = addRes?.body?.message || addRes?.error || "Lỗi thêm KOC vào nhóm";
+                emitLog(`[KOCVIP] KOC ${nextKocName} lỗi (Code ${addCode}): ${aErr}`, true);
+                recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "failed", `Mã ${addCode}: ${aErr}`) : r);
+              }
+            } catch (eAdd) {
+              emitLog(`[KOCVIP] KOC ${nextKocName} ngoại lệ: ${eAdd.message}`, true);
+              recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "failed", eAdd.message) : r);
+            }
+            await sleep(350);
+          }
+        }
+
+        const chunkStatus = mainGroupId ? "sent" : "settled";
+        await localDb("saveChunk", { manifest, chunk, patch: { status: chunkStatus, groupId: mainGroupId, recipients } });
+        return { state: chunkStatus, groupId: mainGroupId };
       }
 
       recipients = recipients.map(r => pending.some(p => p.creatorOecId === r.creatorOecId) ? recipientStatusPatch(r, "failed", `HTTP ${createStatus}, Code ${createCode}: ${errMsg}`) : r);
@@ -1139,16 +1186,16 @@
       });
     }
 
-    // 2. Tạo Floating Action Button (FAB) hình gà tròn với viền hồng hào quang (như hình Image 1)
+    // 2. Tạo Floating Action Button (FAB) hình tròn với viền hồng hào quang (Minibar)
     if (!document.getElementById("kocvip-inpage-fab")) {
       const fab = document.createElement("div");
       fab.id = "kocvip-inpage-fab";
       fab.title = "Mở Mời hàng loạt KOC VIP";
 
-      const chickenImgUrl = safeGetURL("icons/chicken.png");
+      const rocketImgUrl = safeGetURL("icons/icon128.png");
       fab.innerHTML = `
         <div class="kocvip-fab-inner">
-          <img src="${chickenImgUrl}" alt="KOC VIP" draggable="false" />
+          <img src="${rocketImgUrl}" alt="KOC VIP" draggable="false" />
         </div>
       `;
 
@@ -1165,8 +1212,8 @@
         margin: 0 !important;
         background: radial-gradient(circle, #ff69b4 0%, #f43f5e 60%, #e11d48 100%) !important;
         box-shadow: 0 0 18px 5px rgba(244, 63, 94, 0.55), 0 0 32px 10px rgba(236, 72, 153, 0.35), 0 4px 14px rgba(0, 0, 0, 0.25) !important;
-        cursor: grab !important;
-        z-index: 2147483645 !important;
+        cursor: pointer !important;
+        z-index: 2147483646 !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -1212,48 +1259,61 @@
         fab.style.boxShadow = "0 0 18px 5px rgba(244, 63, 94, 0.55), 0 0 32px 10px rgba(236, 72, 153, 0.35), 0 4px 14px rgba(0, 0, 0, 0.25)";
       };
 
-      // Kéo thả dọc theo mép phải (Y axis drag)
-      let isDragging = false;
+      // Kéo thả & Click mở Modal (Chuẩn xác, chống nuốt click trên Trackpad/Mouse)
+      let isMouseDown = false;
+      let startX = 0;
       let startY = 0;
       let initialTop = 0;
-      let hasMoved = false;
+      let hasDragged = false;
+      let dragStartTime = 0;
 
-      fab.onmousedown = (e) => {
+      fab.addEventListener("mousedown", (e) => {
         if (e.button !== 0) return;
-        isDragging = true;
-        hasMoved = false;
+        isMouseDown = true;
+        hasDragged = false;
+        dragStartTime = Date.now();
+        startX = e.clientX;
         startY = e.clientY;
         const rect = fab.getBoundingClientRect();
         initialTop = rect.top;
-        fab.style.cursor = "grabbing";
         fab.style.transition = "none";
-        e.preventDefault();
-      };
+      });
 
-      const onMouseMove = (e) => {
-        if (!isDragging) return;
+      window.addEventListener("mousemove", (e) => {
+        if (!isMouseDown) return;
+        const deltaX = e.clientX - startX;
         const deltaY = e.clientY - startY;
-        if (Math.abs(deltaY) > 4) hasMoved = true;
-        const newTop = Math.max(10, Math.min(window.innerHeight - 70, initialTop + deltaY));
-        fab.style.top = `${newTop}px`;
-      };
-
-      const onMouseUp = () => {
-        if (!isDragging) return;
-        isDragging = false;
-        fab.style.cursor = "grab";
-        fab.style.transition = "transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease";
-        try {
-          localStorage.setItem("kocvip_fab_top", fab.style.top);
-        } catch {}
-
-        if (!hasMoved) {
-          toggleModal();
+        // Chỉ kích hoạt kéo khi chuột dịch chuyển hơn 12px và giữ trên 120ms
+        if (Math.hypot(deltaX, deltaY) > 12 && (Date.now() - dragStartTime > 120)) {
+          hasDragged = true;
+          fab.style.cursor = "grabbing";
+          const newTop = Math.max(10, Math.min(window.innerHeight - 70, initialTop + deltaY));
+          fab.style.top = `${newTop}px`;
         }
-      };
+      });
 
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("mouseup", () => {
+        if (!isMouseDown) return;
+        isMouseDown = false;
+        fab.style.cursor = "pointer";
+        fab.style.transition = "transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease";
+        if (hasDragged) {
+          try {
+            localStorage.setItem("kocvip_fab_top", fab.style.top);
+          } catch {}
+        }
+      });
+
+      // Bắt sự kiện click trực tiếp (Native Click)
+      fab.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (hasDragged) {
+          hasDragged = false;
+          return;
+        }
+        toggleModal();
+      });
 
       (document.body || document.documentElement).appendChild(fab);
     }
@@ -1267,8 +1327,16 @@
   });
 
   function showModal() {
+    if (!isExtensionValid()) {
+      alert("Tiện ích Mời KOC VIP vừa được cập nhật.\n\nVui lòng tải lại trang TikTok (ấn F5 hoặc Cmd+R) để mở bảng điều khiển!");
+      location.reload();
+      return;
+    }
     initInPageOverlay();
     if (overlayHost) {
+      if (overlayIframe && (!overlayIframe.src || overlayIframe.src === "about:blank")) {
+        overlayIframe.src = safeGetURL("ui/index.html");
+      }
       overlayHost.style.display = "flex";
       document.body.style.overflow = "hidden";
     }

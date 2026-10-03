@@ -692,6 +692,27 @@ input:focus, select:focus, textarea:focus {
   background: #BE123C;
 }
 
+.danger-button-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(225, 29, 72, 0.08);
+  color: #E11D48;
+  border: 1px solid rgba(225, 29, 72, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.danger-button-sm:hover {
+  background: #E11D48;
+  color: #FFFFFF;
+  border-color: #E11D48;
+  box-shadow: 0 4px 12px rgba(225, 29, 72, 0.25);
+}
+
 /* Drawer / Sub-modal KOC */
 .modal-overlay-drawer {
   position: absolute;

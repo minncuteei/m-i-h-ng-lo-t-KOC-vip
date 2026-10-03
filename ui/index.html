@@ -232,13 +232,13 @@
         <textarea id="kocDrawerText" class="koc-textarea" placeholder="minhdz&#10;bepthongminh009&#10;@thuy_tieen22051999&#10;7495837291823719283"></textarea>
         
         <div class="koc-drawer-actions">
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: center;">
             <label class="secondary-button-sm" style="cursor: pointer;">
-              📁 Nạp File (Excel .xlsx / CSV / TXT)
+              📁 Nạp File KOC (Excel / CSV / TXT)
               <input type="file" id="kocDrawerFileInput" accept=".xlsx, .xls, .csv, .txt" hidden>
             </label>
-            <button type="button" id="btnDrawerLookup" class="primary-button-sm">
-              🔍 Tra cứu OEC ID từ Username (import_check)
+            <button type="button" id="btnDrawerClear" class="danger-button-sm">
+              🗑️ Xóa danh sách
             </button>
           </div>
           <button type="button" id="btnDrawerSave" class="primary-button">
@@ -247,7 +247,7 @@
         </div>
 
         <div class="koc-stats-chip" id="kocDrawerStats">
-          Tổng nhận diện: <b>0</b> KOC (<b>0</b> đã có OEC ID, <b>0</b> cần tra cứu) • Dự kiến: <b>0</b> nhóm
+          Tổng nhận diện: <b>0</b> KOC • Dự kiến: <b>0</b> nhóm (tối đa 50 KOC/nhóm)
         </div>
       </div>
     </div>
