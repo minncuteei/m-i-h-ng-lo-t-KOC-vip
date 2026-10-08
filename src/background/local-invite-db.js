@@ -322,6 +322,90 @@ export async function getExportableKocs(payload = {}) {
   return kocs;
 }
 
+export async function getRunHistory(payload = {}) {
+  const { shopId } = payload;
+  const db = await openLocalInviteDb();
+  const tx = db.transaction(["runs", "chunks"], "readonly");
+  const runStore = tx.objectStore("runs");
+  const chunkStore = tx.objectStore("chunks");
+
+  let runs = [];
+  if (shopId) {
+    const index = runStore.index("shopId");
+    runs = await requestResult(index.getAll(IDBKeyRange.only(shopId)));
+  } else {
+    runs = await requestResult(runStore.getAll());
+  }
+
+  const allChunks = await requestResult(chunkStore.getAll());
+  const chunksByRun = new Map();
+  for (const c of allChunks || []) {
+    if (!chunksByRun.has(c.serverRunId)) {
+      chunksByRun.set(c.serverRunId, []);
+    }
+    chunksByRun.get(c.serverRunId).push(c);
+  }
+
+  const history = (runs || []).map(r => {
+    const chunks = chunksByRun.get(r.serverRunId) || [];
+    let sentCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    let waitingCount = 0;
+    let totalKocs = 0;
+
+    for (const chunk of chunks) {
+      for (const rec of chunk.recipients || []) {
+        totalKocs++;
+        if (rec.status === "sent") sentCount++;
+        else if (rec.status === "skipped" || rec.status === "conflict") skippedCount++;
+        else if (rec.status === "failed") failedCount++;
+        else if (rec.status === "waiting_daily_reset") waitingCount++;
+      }
+    }
+
+    if (totalKocs === 0) {
+      totalKocs = r.totalEligible || (r.draft?.recipients || []).length || 0;
+    }
+
+    return {
+      serverRunId: r.serverRunId,
+      shopId: r.shopId || "",
+      title: r.draft?.title || "Chiến dịch mời KOC",
+      staff: r.draft?.staff || "",
+      commission: r.draft?.commission || "",
+      status: r.status,
+      totalKocs,
+      sentCount,
+      skippedCount,
+      failedCount,
+      waitingCount,
+      createdAt: r.createdAt || r.updatedAt,
+      updatedAt: r.updatedAt,
+      productsCount: (r.draft?.productIds || []).length || 0,
+    };
+  });
+
+  history.sort((a, b) => new Date(b.createdAt || b.updatedAt || 0) - new Date(a.createdAt || a.updatedAt || 0));
+  return history;
+}
+
+export async function deleteRun(serverRunId) {
+  if (!serverRunId) return false;
+  const db = await openLocalInviteDb();
+  const tx = db.transaction(["runs", "chunks"], "readwrite");
+  tx.objectStore("runs").delete(serverRunId);
+
+  const chunkStore = tx.objectStore("chunks");
+  const chunkIndex = chunkStore.index("serverRunId");
+  const chunks = await requestResult(chunkIndex.getAll(IDBKeyRange.only(serverRunId)));
+  for (const c of chunks || []) {
+    chunkStore.delete(c.chunkId);
+  }
+  await transactionDone(tx);
+  return true;
+}
+
 // Router tiếp nhận yêu cầu thao tác DB từ Content Script hoặc Side Panel
 export async function handleLocalInviteDbOperation(payload = {}) {
   const { op } = payload;
@@ -340,6 +424,8 @@ export async function handleLocalInviteDbOperation(payload = {}) {
       return getRun(payload.serverRunId);
     case "cancelRun":
       return cancelRun(payload.serverRunId);
+    case "deleteRun":
+      return deleteRun(payload.serverRunId);
     case "acquireLock":
       return acquireLock(payload);
     case "releaseLock":
@@ -350,6 +436,8 @@ export async function handleLocalInviteDbOperation(payload = {}) {
       return getCatalogProducts(payload.shopId);
     case "getExportableKocs":
       return getExportableKocs(payload);
+    case "getRunHistory":
+      return getRunHistory(payload);
     default:
       throw new Error(`Unsupported DB op: ${op}`);
   }

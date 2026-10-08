@@ -27,6 +27,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const chkResolveConflict = document.getElementById("chkResolveConflict");
   const chkTestRun = document.getElementById("chkTestRun");
   const inputTestRunCount = document.getElementById("inputTestRunCount");
+  const selectSafeDelay = document.getElementById("selectSafeDelay");
   const chkSampleEnabled = document.getElementById("chkSampleEnabled");
   const sampleModeBox = document.getElementById("sampleModeBox");
 
@@ -78,8 +79,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const execLogContent = document.getElementById("execLogContent");
   const btnExecPause = document.getElementById("btnExecPause");
   const btnExecResume = document.getElementById("btnExecResume");
+  const btnExecMinimize = document.getElementById("btnExecMinimize");
   const btnExecStop = document.getElementById("btnExecStop");
   const btnExecClose = document.getElementById("btnExecClose");
+  const btnExecBack = document.getElementById("btnExecBack");
   const btnExportDebug = document.getElementById("btnExportDebug");
   const btnExportKocExcel = document.getElementById("btnExportKocExcel");
   const btnCopyKocText = document.getElementById("btnCopyKocText");
@@ -87,6 +90,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   const execStopwatchBadge = document.getElementById("execStopwatchBadge");
   const execTopReasonsBox = document.getElementById("execTopReasonsBox");
   const execTopReasonsList = document.getElementById("execTopReasonsList");
+
+  // History Drawer Elements
+  const btnOpenHistory = document.getElementById("btnOpenHistory");
+  const btnOpenHistoryFooter = document.getElementById("btnOpenHistoryFooter");
+  const historyOverlay = document.getElementById("historyOverlay");
+  const btnCloseHistory = document.getElementById("btnCloseHistory");
+  const historyCountBadge = document.getElementById("historyCountBadge");
+  const historyTotalBadge = document.getElementById("historyTotalBadge");
+  const inputHistorySearch = document.getElementById("inputHistorySearch");
+  const btnHistoryRefresh = document.getElementById("btnHistoryRefresh");
+  const btnExportAllHistoryExcel = document.getElementById("btnExportAllHistoryExcel");
+  const historyListContainer = document.getElementById("historyListContainer");
 
   // State
   let rawProducts = [];
@@ -199,16 +214,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `${shop} x nhatminh`;
   }
 
-  // Cấu trúc đặt tên chuẩn: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_03/10_001)
+  // Cấu trúc đặt tên chuẩn: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_08-10_001)
+  // TikTok giới hạn độ dài Tên lời mời tối đa chính xác 30 ký tự (0/30)
   function formatInvitationGroupName(baseTitle, index) {
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, "0");
     const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const dateStr = `${dd}/${mm}`;
-    const idxStr = String(index).padStart(3, "0");
+    const suffix = `_${dd}-${mm}_${String(index).padStart(3, "0")}`; // Dài 11 ký tự: _08-10_001
     let clean = String(baseTitle || generateDefaultTitle()).trim();
-    clean = clean.replace(/_\d{2}\/\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").replace(/_TEST$/i, "").trim();
-    return `${clean}_${dateStr}_${idxStr}`;
+    clean = clean.replace(/[/\\:*?"<>|~`!@#$%^&=+{}\[\];]/g, "-").replace(/\s+/g, " ").replace(/[-_]{2,}/g, "_");
+    clean = clean.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").replace(/_TEST$/i, "").trim();
+    // Giới hạn phần prefix tối đa 30 - 11 = 19 ký tự để đảm bảo tổng độ dài luôn <= 30 ký tự
+    const maxPrefixLen = Math.max(5, 30 - suffix.length);
+    const prefix = clean.slice(0, maxPrefixLen).trim();
+    let name = `${prefix}${suffix}`;
+    if (name.length > 30) name = name.slice(0, 30).trim();
+    return name;
   }
 
   // Quản lý Hạn mức 24h Thông minh (Reset lúc 00:00 mỗi ngày)
@@ -271,6 +292,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       resolveConflict: chkResolveConflict.checked,
       testRun: chkTestRun.checked,
       testRunCount: inputTestRunCount.value,
+      safeDelay: selectSafeDelay ? selectSafeDelay.value : "7500",
       sampleEnabled: chkSampleEnabled ? chkSampleEnabled.checked : true,
       sampleApprovalMode: document.querySelector('input[name="sampleApprovalMode"]:checked')?.value || "manual",
       kocText: kocDrawerText.value,
@@ -311,12 +333,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         inputAdsCommission.value = "2";
       }
       if (s.shareAfter !== undefined) chkShareAfter.checked = !!s.shareAfter;
-      
+
       // Mặc định Zalo: 0943102588
       inputZalo.value = s.zalo || "0943102588";
 
       if (s.facebook) inputFacebook.value = s.facebook;
-      
+
       const DEFAULT_INVITE_MESSAGE = "Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!";
       if (s.message && s.message.trim()) {
         inputMessage.value = s.message;
@@ -327,6 +349,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (s.resolveConflict !== undefined) chkResolveConflict.checked = !!s.resolveConflict;
       if (s.testRun !== undefined) chkTestRun.checked = !!s.testRun;
       if (s.testRunCount) inputTestRunCount.value = s.testRunCount;
+      if (s.safeDelay && selectSafeDelay) selectSafeDelay.value = s.safeDelay;
 
       if (chkSampleEnabled && s.sampleEnabled !== undefined) {
         chkSampleEnabled.checked = !!s.sampleEnabled;
@@ -366,6 +389,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       el.addEventListener("change", saveSettings);
     }
   });
+
+  if (selectSafeDelay) selectSafeDelay.addEventListener("change", saveSettings);
 
   [chkShareAfter, chkResolveConflict, chkTestRun].forEach(el => {
     if (el) el.addEventListener("change", saveSettings);
@@ -546,8 +571,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       );
       chkSelectAllProducts.checked = isFullSelected;
       if (lblSelectAllText) {
-        lblSelectAllText.textContent = isFullSelected 
-          ? `Bỏ full (${selectedCount})` 
+        lblSelectAllText.textContent = isFullSelected
+          ? `Bỏ full (${selectedCount})`
           : `Chọn full (${Math.min(products.length, 100)})`;
       }
     }
@@ -1117,7 +1142,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (verified.length > 0) {
             sampleKoc.creatorOecId = verified[0].creatorOecId;
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -1214,8 +1239,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 7. Gửi Thật (BẮT ĐẦU MỜI HÀNG LOẠT)
   btnSendReal.addEventListener("click", async () => {
+    if (btnSendReal.disabled) return;
+
     if (!activeTikTokTab) {
-      alert("Chưa kết nối tab TikTok Affiliate. Vui lòng mở https://affiliate.tiktok.com và đăng nhập shop.");
+      alert("Chưa kết nối tab TikTok. Vui lòng mở https://affiliate.tiktok.com hoặc https://seller-vn.tiktok.com và đăng nhập shop.");
       return;
     }
 
@@ -1236,29 +1263,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Tự động tra cứu các username chưa có OEC ID trước khi bắt đầu
-    const needLookup = kocList.filter(k => !k.creatorOecId && !!k.handle);
-    if (needLookup.length > 0) {
-      statusQuickText.textContent = `Đang tự động tra cứu ${needLookup.length} username qua TikTok...`;
-      try {
-        const lookupRes = await chrome.runtime.sendMessage({
-          type: "KOCVIP_LOOKUP_HANDLES",
-          payload: { handles: needLookup.map(k => k.handle) },
-        });
-        if (lookupRes?.success && lookupRes.data?.verified) {
-          const vMap = new Map(lookupRes.data.verified.map(v => [v.handle.toLowerCase(), v.creatorOecId]));
-          kocList.forEach(k => {
-            if (!k.creatorOecId && k.handle && vMap.has(k.handle.toLowerCase())) {
-              k.creatorOecId = vMap.get(k.handle.toLowerCase());
-            }
-          });
-          normalizeDrawerText();
-          updateKocListFromText();
-          saveSettings();
-        }
-      } catch (e) {
-        console.warn("[KOC VIP] Auto lookup error:", e);
-      }
+    // Nếu đang có tiến trình chạy chưa xong, hỏi người dùng trước khi đè
+    if (currentRunId && !executionPanel.hidden) {
+      if (!confirm("Một đợt mời đang chạy. Bạn có chắc muốn dừng đợt cũ để bắt đầu đợt mới không?")) return;
+      await chrome.runtime.sendMessage({
+        type: "KOCVIP_INVITE_CONTROL",
+        payload: { action: "stop", serverRunId: currentRunId }
+      }).catch(() => { });
     }
 
     const testRun = chkTestRun.checked;
@@ -1270,88 +1281,121 @@ document.addEventListener("DOMContentLoaded", async () => {
     const confirmMsg = `XÁC NHẬN GỬI THẬT:\n\n• Số KOC mời: ${targetRecipients.length} KOC ${testRun ? '(Chế độ chạy thử)' : ''}\n• Số sản phẩm gắn: ${selectedProducts.length} SP\n• Hoa hồng: Thường ${inputCommission.value}%, Ads ${inputAdsCommission.value}%\n• Tên đợt: ${baseTitle}\n• Thời hạn: ${inputExpiresAt.value || '1 tuần'}\n\nBắt đầu ngay?`;
     if (!confirm(confirmMsg)) return;
 
-    // Hiển thị Execution Panel
-    executionPanel.hidden = false;
-    mSent.textContent = "0";
-    mSkipped.textContent = "0";
-    mFailed.textContent = "0";
-    mReset.textContent = "0";
-    execProgressBar.style.width = "0%";
-    execProgressPercent.textContent = "0%";
-    execProgressStatus.textContent = "Đang khởi tạo đợt mời...";
-    if (execTopReasonsBox) execTopReasonsBox.hidden = true;
-    if (execTopReasonsList) execTopReasonsList.innerHTML = "";
-    execLogContent.innerHTML = "";
-    appendExecLog(`Bắt đầu đợt mời cho ${targetRecipients.length} KOC...`);
+    btnSendReal.disabled = true;
 
-    const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    currentRunId = runId;
-    startStopwatch(Date.now());
     try {
-      chrome.storage.local.set({
-        kocvip_active_run_id: runId,
-        kocvip_run_start_time: Date.now()
-      });
-    } catch {}
+      // Tự động tra cứu các username chưa có OEC ID trước khi bắt đầu
+      const needLookup = kocList.filter(k => !k.creatorOecId && !!k.handle);
+      if (needLookup.length > 0) {
+        statusQuickText.textContent = `Đang tự động tra cứu ${needLookup.length} username qua TikTok...`;
+        try {
+          const lookupRes = await chrome.runtime.sendMessage({
+            type: "KOCVIP_LOOKUP_HANDLES",
+            payload: { handles: needLookup.map(k => k.handle) },
+          });
+          if (lookupRes?.success && lookupRes.data?.verified) {
+            const vMap = new Map(lookupRes.data.verified.map(v => [v.handle.toLowerCase(), v.creatorOecId]));
+            kocList.forEach(k => {
+              if (!k.creatorOecId && k.handle && vMap.has(k.handle.toLowerCase())) {
+                k.creatorOecId = vMap.get(k.handle.toLowerCase());
+              }
+            });
+            normalizeDrawerText();
+            updateKocListFromText();
+            saveSettings();
+          }
+        } catch (e) {
+          console.warn("[KOC VIP] Auto lookup error:", e);
+        }
+      }
 
-    const realShopId = activeTikTokTab.shopId || (activeTikTokTab.url ? new URL(activeTikTokTab.url).searchParams.get("shop_id") || new URL(activeTikTokTab.url).searchParams.get("oec_seller_id") : "") || "7495640849659693211";
-    const realRegion = activeTikTokTab.shopRegion || (activeTikTokTab.url ? new URL(activeTikTokTab.url).searchParams.get("shop_region") : "") || "VN";
+      // Hiển thị Execution Panel
+      executionPanel.removeAttribute("hidden");
+      executionPanel.style.display = "flex";
+      mSent.textContent = "0";
+      mSkipped.textContent = "0";
+      mFailed.textContent = "0";
+      mReset.textContent = "0";
+      execProgressBar.style.width = "0%";
+      execProgressPercent.textContent = "0%";
+      execProgressStatus.textContent = "Đang khởi tạo đợt mời...";
+      btnExecPause.hidden = false;
+      btnExecResume.hidden = true;
+      btnExecStop.hidden = false;
+      btnExecClose.hidden = false;
+      btnExecClose.textContent = "✕ Đóng bảng";
+      if (execTopReasonsBox) execTopReasonsBox.hidden = true;
+      if (execTopReasonsList) execTopReasonsList.innerHTML = "";
+      execLogContent.innerHTML = "";
+      appendExecLog(`Bắt đầu đợt mời cho ${targetRecipients.length} KOC...`);
 
-    const allRecipients = targetRecipients.map(k => ({
-      creatorOecId: k.creatorOecId || "",
-      handle: k.handle || "",
-      status: "local_pending",
-    }));
+      const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      currentRunId = runId;
+      startStopwatch(Date.now());
+      try {
+        chrome.storage.local.set({
+          kocvip_active_run_id: runId,
+          kocvip_run_start_time: Date.now()
+        });
+      } catch { }
 
-    // Tự động phân chia thành các chunk 50 KOC theo giới hạn chuẩn của TikTok (tên nhóm _N1, _N2 chuẩn xác)
-    const chunkSize = 50;
-    const chunks = [];
-    const totalChunks = Math.ceil(allRecipients.length / chunkSize);
-    for (let i = 0; i < allRecipients.length; i += chunkSize) {
-      const batch = allRecipients.slice(i, i + chunkSize);
-      const chunkIndex = Math.floor(i / chunkSize) + 1;
-      const groupName = formatInvitationGroupName(baseTitle, chunkIndex);
-      chunks.push({
-        chunkId: `${runId}_c${chunkIndex}`,
-        serverRunId: runId,
-        groupName,
-        soNhomDaMo: chunkIndex,
+      const realShopId = activeTikTokTab.shopId || (activeTikTokTab.url ? new URL(activeTikTokTab.url).searchParams.get("shop_id") || new URL(activeTikTokTab.url).searchParams.get("oec_seller_id") : "") || "7495640849659693211";
+      const realRegion = activeTikTokTab.shopRegion || (activeTikTokTab.url ? new URL(activeTikTokTab.url).searchParams.get("shop_region") : "") || "VN";
+
+      const allRecipients = targetRecipients.map(k => ({
+        creatorOecId: k.creatorOecId || "",
+        handle: k.handle || "",
         status: "local_pending",
-        recipients: batch,
-      });
-    }
+      }));
 
-    const manifest = {
-      serverRunId: runId,
-      shopId: realShopId,
-      region: realRegion,
-      totalKocs: targetRecipients.length,
-      chunks,
-      draft: {
-        title: campaignTitle,
-        expiresAt: inputExpiresAt.value,
-        contentPreference: selectContentType.value,
-        commission: Number(inputCommission.value || 8),
-        adsCommission: Number(inputAdsCommission.value || 2),
-        shareAfterInvite: chkShareAfter.checked,
-        zalo: inputZalo.value.trim(),
-        facebook: inputFacebook.value.trim(),
-        message: inputMessage.value.trim(),
-        tuXuLyTrung: chkResolveConflict.checked,
-        sampleEnabled: chkSampleEnabled ? chkSampleEnabled.checked : true,
-        sampleApprovalMode: document.querySelector('input[name="sampleApprovalMode"]:checked')?.value || "manual",
-        products: selectedProducts.map(p => ({
-          productId: p.productId,
-          title: p.title,
-          target_commission: Math.round(Number(inputCommission.value || 8) * 100),
-          target_ads_commission: Math.round(Number(inputAdsCommission.value || 2) * 100),
-        })),
-        recipients: allRecipients,
-      },
-    };
+      // Tự động phân chia thành các chunk 50 KOC theo giới hạn chuẩn của TikTok (tên nhóm _N1, _N2 chuẩn xác)
+      const chunkSize = 50;
+      const chunks = [];
+      for (let i = 0; i < allRecipients.length; i += chunkSize) {
+        const batch = allRecipients.slice(i, i + chunkSize);
+        const chunkIndex = Math.floor(i / chunkSize) + 1;
+        const groupName = formatInvitationGroupName(baseTitle, chunkIndex);
+        chunks.push({
+          chunkId: `${runId}_c${chunkIndex}`,
+          serverRunId: runId,
+          groupName,
+          soNhomDaMo: chunkIndex,
+          status: "local_pending",
+          recipients: batch,
+        });
+      }
 
-    try {
-      // 1. Lưu manifest và các chunk vào IndexedDB trực tiếp để Content Script luôn sẵn sàng đọc
+      const manifest = {
+        serverRunId: runId,
+        shopId: realShopId,
+        region: realRegion,
+        totalKocs: targetRecipients.length,
+        safeDelayMs: Number(selectSafeDelay?.value || 7500),
+        chunks,
+        draft: {
+          title: campaignTitle,
+          expiresAt: inputExpiresAt.value,
+          contentPreference: selectContentType.value,
+          commission: Number(inputCommission.value || 8),
+          adsCommission: Number(inputAdsCommission.value || 2),
+          shareAfterInvite: chkShareAfter.checked,
+          zalo: inputZalo.value.trim(),
+          facebook: inputFacebook.value.trim(),
+          message: inputMessage.value.trim(),
+          tuXuLyTrung: chkResolveConflict.checked,
+          sampleEnabled: chkSampleEnabled ? chkSampleEnabled.checked : true,
+          sampleApprovalMode: document.querySelector('input[name="sampleApprovalMode"]:checked')?.value || "manual",
+          products: selectedProducts.map(p => ({
+            productId: p.productId,
+            title: p.title,
+            target_commission: Math.round(Number(inputCommission.value || 8) * 100),
+            target_ads_commission: Math.round(Number(inputAdsCommission.value || 2) * 100),
+          })),
+          recipients: allRecipients,
+        },
+      };
+
+      appendExecLog("Đang lưu cấu hình đợt mời vào IndexedDB...");
       await chrome.runtime.sendMessage({
         type: "KOCVIP_LOCAL_DB",
         payload: { op: "saveManifest", manifest },
@@ -1363,7 +1407,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
       }
 
-      // 2. Chuyển giao tiến trình sang Content Script
+      appendExecLog("Đang kết nối cổng TikTok Affiliate và khởi động tiến trình...");
       const res = await chrome.runtime.sendMessage({
         type: "KOCVIP_START_INVITE",
         payload: { manifest },
@@ -1373,6 +1417,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       appendExecLog("Đợt mời đã được chuyển giao cho Content Script thực thi an toàn.");
     } catch (err) {
       appendExecLog(`Lỗi khởi động: ${err.message}`, true);
+      execProgressStatus.textContent = `Lỗi: ${err.message}`;
+    } finally {
+      btnSendReal.disabled = false;
     }
   });
 
@@ -1401,28 +1448,104 @@ document.addEventListener("DOMContentLoaded", async () => {
     appendExecLog("Đã gửi lệnh tiếp tục.");
   });
 
-  btnExecStop.addEventListener("click", () => {
-    if (!confirm("Bạn có chắc chắn muốn hủy bỏ đợt mời này không?")) return;
-    chrome.runtime.sendMessage({ type: "KOCVIP_INVITE_CONTROL", payload: { action: "stop", serverRunId: currentRunId } });
-    appendExecLog("Đã gửi lệnh hủy đợt mời.");
-    btnExecClose.hidden = false;
+  function closeExecutionPanel(clearKocList = false) {
+    executionPanel.hidden = true;
+    executionPanel.setAttribute("hidden", "");
+    executionPanel.style.display = "none";
     stopStopwatch();
+    currentRunId = null;
     try {
-      chrome.storage.local.remove(["kocvip_active_run_id"]);
-    } catch {}
+      chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+      localStorage.removeItem("kocvip_last_run_id");
+    } catch { }
+    if (clearKocList) {
+      kocDrawerText.value = "";
+      updateKocListFromText();
+      saveSettings();
+    }
+  }
+
+  btnExecStop.addEventListener("click", async () => {
+    if (!confirm("Bạn có chắc chắn muốn hủy bỏ đợt mời này không?")) return;
+
+    stopStopwatch();
+    appendExecLog("Đang gửi lệnh hủy đợt mời...");
+    execProgressStatus.textContent = "Đã hủy bỏ đợt mời";
+    btnExecPause.hidden = true;
+    btnExecResume.hidden = true;
+    btnExecStop.hidden = true;
+    btnExecClose.hidden = false;
+    btnExecClose.textContent = "← Quay lại thiết lập";
+
+    let targetRunId = currentRunId;
+    if (!targetRunId) {
+      try {
+        const stored = await chrome.storage.local.get(["kocvip_active_run_id"]);
+        targetRunId = stored?.kocvip_active_run_id;
+      } catch { }
+    }
+
+    try {
+      await chrome.runtime.sendMessage({
+        type: "KOCVIP_INVITE_CONTROL",
+        payload: { action: "stop", serverRunId: targetRunId }
+      });
+    } catch (e) {
+      console.warn("Lỗi gửi dừng tới runtime:", e);
+    }
+
+    try {
+      window.parent.postMessage({
+        type: "KOCVIP_INVITE_CONTROL",
+        payload: { action: "stop", serverRunId: targetRunId }
+      }, "*");
+    } catch { }
+
+    if (targetRunId) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: "KOCVIP_LOCAL_DB",
+          payload: { op: "cancelRun", serverRunId: targetRunId }
+        });
+      } catch { }
+    }
+
+    currentRunId = null;
+    try {
+      await chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+      localStorage.removeItem("kocvip_last_run_id");
+    } catch { }
+
+    appendExecLog("Đã hủy bỏ đợt mời thành công.");
+
+    // Tự động đóng bảng tiến trình sau 500ms để người dùng quay lại giao diện thiết lập
+    setTimeout(() => {
+      closeExecutionPanel(false);
+    }, 500);
   });
 
   btnExecClose.addEventListener("click", () => {
-    executionPanel.hidden = true;
-    stopStopwatch();
-    try {
-      chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_run_start_time"]);
-    } catch {}
-    // Tự động bỏ KOC trước đó đã chọn sau khi mời xong
-    kocDrawerText.value = "";
-    updateKocListFromText();
-    saveSettings();
+    closeExecutionPanel(false);
   });
+
+  if (btnExecMinimize) {
+    btnExecMinimize.addEventListener("click", () => {
+      window.parent.postMessage({ type: "KOCVIP_MINIMIZE_OVERLAY" }, "*");
+    });
+  }
+
+  // Phím tắt Esc để thu nhỏ modal ra ngoài giải Captcha hoặc làm việc khác
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      window.parent.postMessage({ type: "KOCVIP_MINIMIZE_OVERLAY" }, "*");
+    }
+  });
+
+  if (btnExecBack) {
+    btnExecBack.addEventListener("click", () => {
+      closeExecutionPanel(false);
+    });
+  }
 
   function formatStatusVN(status) {
     switch (status) {
@@ -1457,7 +1580,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Định dạng bảng theo yêu cầu (đã bỏ cột Nhóm mời)
+    // ==========================================
+    // TRANG 1 (SHEET 1): DANH SÁCH KOC CHI TIẾT
+    // ==========================================
     const headers = [
       "STT",
       "Username KOC",
@@ -1468,11 +1593,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       "Thời gian mời"
     ];
 
-    const rows = [headers];
+    const listRows = [headers];
     kocs.forEach((k, idx) => {
       let handle = k.handle || "";
       if (handle && !handle.startsWith("@")) handle = `@${handle}`;
-      rows.push([
+      listRows.push([
         idx + 1,
         handle,
         k.creatorOecId || "",
@@ -1483,22 +1608,99 @@ document.addEventListener("DOMContentLoaded", async () => {
       ]);
     });
 
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"] = [
+    const wsList = XLSX.utils.aoa_to_sheet(listRows);
+    wsList["!cols"] = [
       { wch: 6 },
       { wch: 24 },
       { wch: 25 },
       { wch: 25 },
-      { wch: 22 },
-      { wch: 45 },
+      { wch: 24 },
+      { wch: 48 },
       { wch: 22 }
     ];
 
+    // ==========================================
+    // TRANG 2 (SHEET 2): BÁO CÁO THỐNG KÊ KẾT QUẢ
+    // ==========================================
+    const total = kocs.length;
+    let sentCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    let waitingCount = 0;
+    let otherCount = 0;
+    const reasonCounts = {};
+
+    kocs.forEach(k => {
+      const st = k.status;
+      if (st === "sent") {
+        sentCount++;
+      } else if (st === "skipped" || st === "conflict") {
+        skippedCount++;
+      } else if (st === "failed") {
+        failedCount++;
+      } else if (st === "waiting_daily_reset") {
+        waitingCount++;
+      } else {
+        otherCount++;
+      }
+
+      let r = (k.reason || "").trim();
+      if (!r) {
+        if (st === "sent") r = "Đã gửi lời mời thành công";
+        else if (st === "skipped" || st === "conflict") r = "KOC bị trùng / Bỏ qua";
+        else if (st === "failed") r = "Thất bại không rõ lý do";
+        else r = formatStatusVN(st);
+      }
+      reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+    });
+
+    const calcPct = (cnt) => total > 0 ? `${((cnt / total) * 100).toFixed(1)}%` : "0.0%";
+    const exportTimeStr = formatTimeVN(new Date().toISOString());
+
+    const statsRows = [
+      ["BÁO CÁO THỐNG KÊ KẾT QUẢ MỜI KOC VIP"],
+      ["Thời gian xuất báo cáo:", exportTimeStr],
+      ["Tổng số lượng KOC:", total],
+      [],
+      ["1. BẢNG TỔNG QUAN KẾT QUẢ GỬI LỜI MỜI"],
+      ["STT", "Chỉ số / Trạng thái", "Số lượng KOC", "Tỷ lệ (%)", "Ghi chú & Đánh giá"],
+      [1, "✅ Mời thành công (Sent)", sentCount, calcPct(sentCount), "Đã gửi lời mời thành công lên TikTok Shop"],
+      [2, "⚠️ Bị trùng / Bỏ qua (Skipped)", skippedCount, calcPct(skippedCount), "KOC đã được gửi lời mời trong 30 ngày qua hoặc trùng đợt cũ"],
+      [3, "❌ Thất bại / Lỗi (Failed)", failedCount, calcPct(failedCount), "KOC đạt giới hạn nhận tin, chặn tin nhắn hoặc TikTok từ chối"],
+      [4, "⏳ Chờ reset 0h / Đang chờ", waitingCount + otherCount, calcPct(waitingCount + otherCount), "Chờ TikTok reset hạn mức ngày mới hoặc đang hàng đợi"],
+      ["", "TỔNG CỘNG", total, "100.0%", ""],
+      [],
+      ["2. PHÂN TÍCH CHI TIẾT THEO TỪNG NGUYÊN NHÂN / PHẢN HỒI"],
+      ["STT", "Chi tiết lý do / Phản hồi", "Số lượng KOC", "Tỷ lệ (%)"]
+    ];
+
+    const sortedReasons = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1]);
+    sortedReasons.forEach(([reason, count], idx) => {
+      statsRows.push([
+        idx + 1,
+        reason,
+        count,
+        calcPct(count)
+      ]);
+    });
+
+    const wsStats = XLSX.utils.aoa_to_sheet(statsRows);
+    wsStats["!cols"] = [
+      { wch: 6 },
+      { wch: 45 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 55 }
+    ];
+
+    // Tạo Workbook và gắn cả 2 Trang (Sheets)
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "KOC Đã Mời");
+    XLSX.utils.book_append_sheet(wb, wsList, "Danh Sách KOC");
+    XLSX.utils.book_append_sheet(wb, wsStats, "Thống Kê");
+
     const dStr = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `${baseName}_${dStr}.xlsx`);
-    appendExecLog(`📊 Đã xuất file Excel thành công (${kocs.length} KOC).`);
+    appendExecLog(`📊 Đã xuất file Excel thành công (${kocs.length} KOC, gồm 2 sheet: Danh Sách & Thống Kê).`);
   }
 
   // Nút Xuất Excel đợt mời hiện tại
@@ -1579,47 +1781,243 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // Xuất file Debug JSON
-  if (btnExportDebug) {
-    btnExportDebug.addEventListener("click", async () => {
+  // ==========================================
+  // QUẢN LÝ LỊCH SỬ CÁC LẦN MỜI & ĐỐI CHIẾU
+  // ==========================================
+  let cachedRunHistory = [];
+
+  async function loadHistoryList(filterText = "") {
+    if (!historyListContainer) return;
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "KOCVIP_LOCAL_DB",
+        payload: { op: "getRunHistory", shopId: currentLoadedShopId },
+      });
+      cachedRunHistory = res?.data || [];
+      if (historyCountBadge) historyCountBadge.textContent = String(cachedRunHistory.length);
+      if (historyTotalBadge) historyTotalBadge.textContent = `${cachedRunHistory.length} đợt mời`;
+
+      renderHistoryCards(filterText);
+    } catch (err) {
+      historyListContainer.innerHTML = `<div class="history-empty-hint">Lỗi tải lịch sử: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderHistoryCards(filterText = "") {
+    if (!historyListContainer) return;
+    const q = (filterText || "").trim().toLowerCase();
+    const filtered = cachedRunHistory.filter(r => {
+      if (!q) return true;
+      return (r.title || "").toLowerCase().includes(q) ||
+             (r.serverRunId || "").toLowerCase().includes(q) ||
+             (r.staff || "").toLowerCase().includes(q);
+    });
+
+    if (filtered.length === 0) {
+      historyListContainer.innerHTML = `<div class="history-empty-hint">${cachedRunHistory.length === 0 ? "Chưa có đợt mời nào được lưu trên máy này." : "Không tìm thấy đợt mời nào khớp với từ khóa tìm kiếm."}</div>`;
+      return;
+    }
+
+    historyListContainer.innerHTML = "";
+    filtered.forEach(r => {
+      const card = document.createElement("div");
+      card.className = "history-card";
+
+      const timeStr = formatTimeVN(r.createdAt || r.updatedAt);
+      const totalKocStr = formatNumberVN(r.totalKocs || 0);
+      const sentStr = formatNumberVN(r.sentCount || 0);
+      const skippedStr = formatNumberVN(r.skippedCount || 0);
+      const failedStr = formatNumberVN(r.failedCount || 0);
+      const waitingStr = formatNumberVN(r.waitingCount || 0);
+
+      let statusBadge = `<span class="history-card-status-badge status-completed">Đã hoàn tất</span>`;
+      if (r.status === "cancelled") {
+        statusBadge = `<span class="history-card-status-badge status-cancelled">Đã hủy bỏ</span>`;
+      } else if (r.status === "running" || r.status === "local_ready" || r.status === "local_pending") {
+        statusBadge = `<span class="history-card-status-badge status-running">Đang chạy...</span>`;
+      }
+
+      card.innerHTML = `
+        <div class="history-card-top">
+          <div class="history-card-title-group">
+            <div class="history-card-title">
+              <span>${escapeHtml(r.title || "Chiến dịch mời KOC")}</span>
+              <span class="history-koc-badge">${totalKocStr} KOC</span>
+            </div>
+            <div class="history-card-meta">
+              <span>🕒 ${timeStr}</span>
+              ${r.staff ? `<span>👤 NV: ${escapeHtml(r.staff)}</span>` : ""}
+              ${r.productsCount ? `<span>📦 ${r.productsCount} sản phẩm</span>` : ""}
+              ${statusBadge}
+            </div>
+          </div>
+        </div>
+
+        <div class="history-card-stats-row">
+          <span class="history-stat-pill success">✅ <b>${sentStr}</b> Thành công</span>
+          <span class="history-stat-pill warning">⚠️ <b>${skippedStr}</b> Bị trùng / Bỏ qua</span>
+          ${(r.failedCount || 0) > 0 ? `<span class="history-stat-pill danger">❌ <b>${failedStr}</b> Lỗi</span>` : ""}
+          ${(r.waitingCount || 0) > 0 ? `<span class="history-stat-pill info">⏳ <b>${waitingStr}</b> Chờ reset 0h</span>` : ""}
+        </div>
+
+        <div class="history-card-actions">
+          <button type="button" class="secondary-button-sm btn-export-history-run btn-excel-green" title="Xuất file Excel gồm Trang 1 (Danh sách KOC) và Trang 2 (Thống kê) của riêng đợt này để đối chiếu">
+            📊 Xuất Excel (2 Trang)
+          </button>
+          <button type="button" class="secondary-button-sm btn-view-history-run" title="Mở xem lại chi tiết và tiến trình đợt mời này">
+            👁️ Xem tiến trình
+          </button>
+          <button type="button" class="danger-button-sm btn-delete-history-run" title="Xóa đợt mời này khỏi lịch sử">
+            🗑️ Xóa
+          </button>
+        </div>
+      `;
+
+      // Event listeners for card buttons
+      const btnExport = card.querySelector(".btn-export-history-run");
+      if (btnExport) {
+        btnExport.addEventListener("click", async () => {
+          try {
+            btnExport.disabled = true;
+            btnExport.textContent = "⏳ Đang xuất...";
+            const res = await chrome.runtime.sendMessage({
+              type: "KOCVIP_LOCAL_DB",
+              payload: { op: "getExportableKocs", serverRunId: r.serverRunId },
+            });
+            const kocs = res?.data || [];
+            if (!kocs.length) {
+              alert("Không tìm thấy dữ liệu KOC của đợt mời này!");
+            } else {
+              downloadKocsExcel(kocs, `kocvip_dot_moi_${r.serverRunId || 'export'}`);
+            }
+          } catch (err) {
+            alert(`Lỗi khi xuất file: ${err.message}`);
+          } finally {
+            btnExport.disabled = false;
+            btnExport.textContent = "📊 Xuất Excel (2 Trang)";
+          }
+        });
+      }
+
+      const btnView = card.querySelector(".btn-view-history-run");
+      if (btnView) {
+        btnView.addEventListener("click", () => {
+          if (historyOverlay) historyOverlay.hidden = true;
+          loadAndShowRun(r.serverRunId);
+        });
+      }
+
+      const btnDelete = card.querySelector(".btn-delete-history-run");
+      if (btnDelete) {
+        btnDelete.addEventListener("click", async () => {
+          if (confirm(`Bạn có chắc muốn xóa đợt mời "${r.title || r.serverRunId}" khỏi lịch sử máy không?`)) {
+            await chrome.runtime.sendMessage({
+              type: "KOCVIP_LOCAL_DB",
+              payload: { op: "deleteRun", serverRunId: r.serverRunId },
+            });
+            loadHistoryList(inputHistorySearch?.value || "");
+          }
+        });
+      }
+
+      historyListContainer.appendChild(card);
+    });
+  }
+
+  const openHistoryDrawer = () => {
+    if (historyOverlay) {
+      historyOverlay.hidden = false;
+      loadHistoryList(inputHistorySearch?.value || "");
+    }
+  };
+
+  const closeHistoryDrawer = () => {
+    if (historyOverlay) historyOverlay.hidden = true;
+  };
+
+  if (btnOpenHistory) btnOpenHistory.addEventListener("click", openHistoryDrawer);
+  if (btnOpenHistoryFooter) btnOpenHistoryFooter.addEventListener("click", openHistoryDrawer);
+  if (btnCloseHistory) btnCloseHistory.addEventListener("click", closeHistoryDrawer);
+  if (btnHistoryRefresh) btnHistoryRefresh.addEventListener("click", () => loadHistoryList(inputHistorySearch?.value || ""));
+
+  if (inputHistorySearch) {
+    inputHistorySearch.addEventListener("input", (e) => {
+      renderHistoryCards(e.target.value);
+    });
+  }
+
+  if (btnExportAllHistoryExcel) {
+    btnExportAllHistoryExcel.addEventListener("click", async () => {
       try {
-        const runRes = await chrome.runtime.sendMessage({
+        btnExportAllHistoryExcel.disabled = true;
+        btnExportAllHistoryExcel.textContent = "⏳ Đang xuất...";
+        const res = await chrome.runtime.sendMessage({
           type: "KOCVIP_LOCAL_DB",
-          payload: { op: "getRun", serverRunId: currentRunId },
+          payload: { op: "getExportableKocs", shopId: currentLoadedShopId },
         });
-        const chunkRes = await chrome.runtime.sendMessage({
-          type: "KOCVIP_LOCAL_DB",
-          payload: { op: "listChunks", serverRunId: currentRunId },
-        });
-
-        const debugData = {
-          runId: currentRunId,
-          exportedAt: new Date().toISOString(),
-          shopTab: activeTikTokTab,
-          run: runRes?.data || null,
-          chunks: chunkRes?.data || [],
-          logs: Array.from(execLogContent.children).map(el => el.textContent),
-        };
-
-        const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `kocvip_debug_${currentRunId || 'current'}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        appendExecLog("Đã xuất file debug JSON thành công.");
+        const kocs = res?.data || [];
+        if (!kocs.length) {
+          alert("Chưa tìm thấy KOC nào trong lịch sử máy này.");
+        } else {
+          downloadKocsExcel(kocs, `kocvip_tat_ca_lich_su_koc_${currentLoadedShopId || 'all'}`);
+        }
       } catch (err) {
-        alert(`Không thể xuất debug: ${err.message}`);
+        alert(`Lỗi khi xuất file: ${err.message}`);
+      } finally {
+        btnExportAllHistoryExcel.disabled = false;
+        btnExportAllHistoryExcel.textContent = "📊 Xuất tất cả lịch sử";
       }
     });
   }
 
+  // Tự động nạp số lượng lịch sử ban đầu
+  loadHistoryList();
+
   // Khôi phục và hiển thị đợt mời (đang chạy hoặc đã xong) lên giao diện chính
-  async function loadAndShowRun(runId) {
+  async function loadAndShowRun(runId, snapshot) {
     if (!runId) return;
     currentRunId = runId;
     executionPanel.hidden = false;
+    executionPanel.removeAttribute("hidden");
+    executionPanel.style.display = "flex";
+    btnExecClose.hidden = false;
+
+    // Nếu có snapshot nhanh từ minibar (hoặc từ message), hiển thị ngay lập tức
+    if (snapshot) {
+      if (snapshot.sent != null) mSent.textContent = formatNumberVN(snapshot.sent);
+      if (snapshot.skipped != null) mSkipped.textContent = formatNumberVN(snapshot.skipped);
+      if (snapshot.failed != null) mFailed.textContent = formatNumberVN(snapshot.failed);
+      if (snapshot.waiting != null) mReset.textContent = formatNumberVN(snapshot.waiting);
+      const total = snapshot.totalRecipients || snapshot.total || 0;
+      const processed = snapshot.processed || ((snapshot.sent || 0) + (snapshot.skipped || 0) + (snapshot.failed || 0));
+      const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+      execProgressBar.style.width = `${pct}%`;
+      execProgressPercent.textContent = `${pct}%`;
+      const isDone = snapshot.status === "completed" || snapshot.status === "cancelled" || snapshot.status === "failed" || (total > 0 && processed >= total && processed > 0);
+      if (snapshot.status === "cancelled") {
+        execProgressStatus.textContent = `Đã hủy bỏ (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+      } else if (snapshot.status === "failed") {
+        execProgressStatus.textContent = `Thất bại (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+      } else if (snapshot.status === "waiting_captcha") {
+        execProgressStatus.textContent = "⚠️ Đang chờ bạn giải Captcha trên màn hình...";
+      } else if (isDone) {
+        execProgressStatus.textContent = `Đã hoàn tất (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+      } else if (processed === 0) {
+        execProgressStatus.textContent = `Đang khởi tạo đợt mời (0/${formatNumberVN(total)})`;
+      } else {
+        execProgressStatus.textContent = `Đang xử lý (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+      }
+      if (isDone) {
+        btnExecPause.hidden = true;
+        btnExecResume.hidden = true;
+        btnExecStop.hidden = true;
+        btnExecClose.hidden = false;
+        btnExecClose.textContent = "✕ Đóng bảng";
+        stopStopwatch();
+      } else {
+        btnExecStop.hidden = false;
+      }
+    }
 
     try {
       const [runRes, chunkRes] = await Promise.all([
@@ -1630,9 +2028,24 @@ document.addEventListener("DOMContentLoaded", async () => {
       const run = runRes?.data;
       const chunks = chunkRes?.data || [];
 
+      if (!run && (!chunks || chunks.length === 0)) {
+        appendExecLog("Không tìm thấy đợt mời hoặc đợt mời đã kết thúc.");
+        btnExecPause.hidden = true;
+        btnExecResume.hidden = true;
+        btnExecStop.hidden = true;
+        btnExecClose.hidden = false;
+        btnExecClose.textContent = "← Quay lại thiết lập";
+        execProgressStatus.textContent = "Không tìm thấy dữ liệu đợt mời";
+        stopStopwatch();
+        setTimeout(() => {
+          closeExecutionPanel(false);
+        }, 1200);
+        return;
+      }
+
       if (run) {
         runStartedAt = run.startedAt ? new Date(run.startedAt).getTime() : (run.createdAt ? new Date(run.createdAt).getTime() : Date.now());
-        const isCompleted = run.completed || run.status === "completed" || run.status === "cancelled" || run.status === "failed";
+        const isCompleted = run.status === "completed" || run.status === "cancelled" || run.status === "failed";
         if (isCompleted) {
           stopStopwatch();
           if (run.finishedAt && run.startedAt) {
@@ -1641,15 +2054,27 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
           btnExecPause.hidden = true;
           btnExecResume.hidden = true;
+          btnExecStop.hidden = true;
           btnExecClose.hidden = false;
+          btnExecClose.textContent = "✕ Đóng bảng";
+        } else if (run.status === "waiting_captcha") {
+          btnExecPause.hidden = true;
+          btnExecResume.hidden = true;
+          btnExecStop.hidden = false;
+          btnExecClose.hidden = false;
+          stopStopwatch();
+          execProgressStatus.textContent = "⚠️ Đang chờ bạn giải Captcha trên màn hình...";
         } else if (run.status === "paused") {
           btnExecPause.hidden = true;
           btnExecResume.hidden = false;
+          btnExecStop.hidden = false;
+          btnExecClose.hidden = false;
           stopStopwatch();
         } else {
           btnExecPause.hidden = false;
           btnExecResume.hidden = true;
-          btnExecClose.hidden = true;
+          btnExecStop.hidden = false;
+          btnExecClose.hidden = false;
           startStopwatch(runStartedAt);
         }
       }
@@ -1685,8 +2110,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
         execProgressBar.style.width = `${pct}%`;
         execProgressPercent.textContent = `${pct}%`;
-        const isDone = run?.completed || run?.status === "completed" || processed >= total;
-        execProgressStatus.textContent = isDone ? `Đã hoàn tất (${formatNumberVN(processed)}/${formatNumberVN(total)})` : `Đang xử lý (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+        const isDone = run?.status === "completed" || run?.status === "cancelled" || run?.status === "failed" || (total > 0 && processed >= total && processed > 0);
+        if (run?.status === "cancelled") {
+          execProgressStatus.textContent = `Đã hủy bỏ (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+        } else if (run?.status === "failed") {
+          execProgressStatus.textContent = `Thất bại (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+        } else if (run?.status === "waiting_captcha") {
+          execProgressStatus.textContent = "⚠️ Đang chờ bạn giải Captcha trên màn hình...";
+        } else if (isDone) {
+          execProgressStatus.textContent = `Đã hoàn tất (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+        } else if (processed === 0) {
+          execProgressStatus.textContent = `Đang khởi tạo đợt mời (0/${formatNumberVN(total)})`;
+        } else {
+          execProgressStatus.textContent = `Đang xử lý (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+        }
+
+        if (isDone) {
+          btnExecPause.hidden = true;
+          btnExecResume.hidden = true;
+          btnExecStop.hidden = true;
+          btnExecClose.hidden = false;
+          btnExecClose.textContent = "✕ Đóng bảng";
+        } else {
+          btnExecStop.hidden = false;
+        }
 
         if (execTopReasonsBox && execTopReasonsList) {
           const sorted = Object.entries(reasonCounts).sort((a, b) => b[1] - a[1]);
@@ -1705,10 +2152,33 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // Lắng nghe tín hiệu mở đợt mời từ content script (khi ấn nút Mở to trên thanh mini)
+  // Lắng nghe tín hiệu mở đợt mời từ content script (khi ấn nút Mở to trên thanh mini) hoặc trực tiếp từ iframe
   window.addEventListener("message", (e) => {
     if (e.data?.type === "KOCVIP_OPEN_RUN" && e.data.serverRunId) {
-      loadAndShowRun(e.data.serverRunId);
+      loadAndShowRun(e.data.serverRunId, e.data.snapshot);
+      // Replay log đã cache để không mất log khi mở lại bảng điều khiển
+      const cachedLogs = e.data.cachedLogs;
+      if (Array.isArray(cachedLogs) && cachedLogs.length > 0) {
+        // Xóa placeholder mặc định và điền log thực
+        if (execLogContent) {
+          execLogContent.innerHTML = "";
+          // Replay theo thứ tự cũ nhất -> mới nhất (prepend nên ghi ngược)
+          [...cachedLogs].reverse().forEach(entry => {
+            const t = entry.ts ? new Date(entry.ts).toLocaleTimeString("vi-VN") : "??:??:??";
+            const div = document.createElement("div");
+            div.className = `log-line ${entry.isError ? "error" : ""}`;
+            div.textContent = `[${t}] ${entry.isError ? "[LỖI] " : ""}${entry.text}`;
+            execLogContent.prepend(div);
+          });
+        }
+      }
+    } else if (e.data?.type === "KOCVIP_LOG_ENTRY") {
+      const { text, isError } = e.data.payload || {};
+      if (text) appendExecLog(text, !!isError);
+    } else if (e.data?.type === "KOCVIP_PROGRESS_UPDATE") {
+      const { serverRunId, status, message: extraMsg } = e.data.payload || {};
+      if (extraMsg) appendExecLog(extraMsg);
+      if (serverRunId) loadAndShowRun(serverRunId, e.data.payload);
     }
   });
 
@@ -1719,14 +2189,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (initialRunId) {
       loadAndShowRun(initialRunId);
     } else {
-      chrome.storage.local.get(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]).then(stored => {
-        const rId = stored?.kocvip_active_run_id || stored?.kocvip_last_run_id;
+      chrome.storage.local.get(["kocvip_active_run_id", "kocvip_run_start_time"]).then(stored => {
+        const rId = stored?.kocvip_active_run_id;
         if (rId) {
           loadAndShowRun(rId);
         }
       });
     }
-  } catch {}
+  } catch { }
 
   // Lắng nghe Tiến trình & Log Real-time
   chrome.runtime.onMessage.addListener((message) => {
@@ -1800,7 +2270,12 @@ document.addEventListener("DOMContentLoaded", async () => {
             }
           }
 
-          if (status === "paused") {
+          if (status === "waiting_captcha") {
+            execProgressStatus.textContent = "⚠️ Đang chờ bạn giải Captcha trên màn hình...";
+            btnExecPause.hidden = true;
+            btnExecResume.hidden = true;
+            stopStopwatch();
+          } else if (status === "paused") {
             btnExecPause.hidden = true;
             btnExecResume.hidden = false;
             stopStopwatch();
@@ -1811,20 +2286,33 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
 
           if (completed) {
-            appendExecLog(`Hoàn tất đợt mời! Thành công: ${formatNumberVN(sent)} • Bỏ qua/trùng: ${formatNumberVN(skipped)} • Lỗi: ${formatNumberVN(failed)} • Chờ reset: ${formatNumberVN(waiting)}`);
+            const isCancelled = status === "cancelled";
+            if (isCancelled) {
+              appendExecLog(`Đợt mời đã được hủy bỏ! Đã mời: ${formatNumberVN(sent)} • Bỏ qua/trùng: ${formatNumberVN(skipped)} • Lỗi: ${formatNumberVN(failed)}`);
+              execProgressStatus.textContent = `Đã hủy bỏ đợt mời (${formatNumberVN(processed)}/${formatNumberVN(total)})`;
+            } else {
+              appendExecLog(`Hoàn tất đợt mời! Thành công: ${formatNumberVN(sent)} • Bỏ qua/trùng: ${formatNumberVN(skipped)} • Lỗi: ${formatNumberVN(failed)} • Chờ reset: ${formatNumberVN(waiting)}`);
+            }
             btnExecPause.hidden = true;
             btnExecResume.hidden = true;
+            btnExecStop.hidden = true;
             btnExecClose.hidden = false;
+            btnExecClose.textContent = "✕ Đóng bảng";
             stopStopwatch();
-            // Lưu lại đợt mời vào last_run_id để người dùng có thể mở to xem lại bất cứ lúc nào
             try {
-              chrome.storage.local.set({ kocvip_last_run_id: currentRunId });
-            } catch {}
+              chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id"]);
+              localStorage.removeItem("kocvip_last_run_id");
+            } catch { }
 
-            // Tự động bỏ KOC trước đó đã chọn sau khi mời xong
-            kocDrawerText.value = "";
-            updateKocListFromText();
-            saveSettings();
+            // Chỉ tự động bỏ KOC đã chọn nếu đợt mời thực sự gửi thành công KOC
+            if (sent > 0) {
+              kocDrawerText.value = "";
+              updateKocListFromText();
+              saveSettings();
+            }
+
+            // Tự động cập nhật lại danh sách & badge Lịch sử mời
+            loadHistoryList();
 
             if (currentRunId && sent > 0) {
               getDailyQuota().then(async quota => {
@@ -1840,7 +2328,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               });
             }
           }
-        } catch {}
+        } catch { }
       })();
       return false;
     }
@@ -1864,7 +2352,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       window.parent.postMessage({ type: "KOCVIP_TOGGLE_MAXIMIZE", isMaximized: next }, "*");
       try {
         localStorage.setItem("kocvip_is_maximized", next ? "true" : "false");
-      } catch {}
+      } catch { }
     });
   }
 
@@ -1872,7 +2360,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (localStorage.getItem("kocvip_is_maximized") === "true") {
       updateMaximizeButtonState(true);
     }
-  } catch {}
+  } catch { }
 
   btnClose.addEventListener("click", () => {
     window.parent.postMessage({ type: "KOCVIP_CLOSE_OVERLAY" }, "*");

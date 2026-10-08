@@ -92,11 +92,42 @@
   }
 
   function emitLog(text, isError = false) {
+    // Cache log vào bộ nhớ để phục hồi khi modal mở lại
+    if (currentActiveRun) {
+      if (!currentActiveRun.logs) currentActiveRun.logs = [];
+      currentActiveRun.logs.push({ text, isError, ts: Date.now() });
+      if (currentActiveRun.logs.length > 250) currentActiveRun.logs.splice(0, currentActiveRun.logs.length - 200);
+    }
     try {
       chrome.runtime.sendMessage({
         type: "KOCVIP_LOG_ENTRY",
         payload: { text, isError },
       });
+    } catch {}
+    try {
+      if (overlayIframe?.contentWindow) {
+        overlayIframe.contentWindow.postMessage({
+          type: "KOCVIP_LOG_ENTRY",
+          payload: { text, isError },
+        }, "*");
+      }
+    } catch {}
+  }
+
+  function emitProgress(payload = {}) {
+    try {
+      chrome.runtime.sendMessage({
+        type: "KOCVIP_PROGRESS_UPDATE",
+        payload,
+      });
+    } catch {}
+    try {
+      if (overlayIframe?.contentWindow) {
+        overlayIframe.contentWindow.postMessage({
+          type: "KOCVIP_PROGRESS_UPDATE",
+          payload,
+        }, "*");
+      }
     } catch {}
   }
 
@@ -212,17 +243,43 @@
     return `Bị lỗi (do TikTok phản hồi: ${rawMsg || "Lỗi tham số"})`;
   }
 
-  // Tên nhóm chuẩn hóa: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_03/10_001)
+  // Chuẩn hóa tên nhóm an toàn cho TikTok API (giữ dấu tiếng Việt, loại bỏ ký tự đặc biệt, giới hạn tối đa 30 ký tự)
+  function sanitizeInvitationName(rawName) {
+    let name = String(rawName || "").trim();
+    // Thay thế các ký tự đặc biệt không an toàn gây lỗi
+    name = name.replace(/[/\\:*?"<>|~`!@#$%^&=+{}\[\];]/g, "-");
+    name = name.replace(/\s+/g, " ");
+    name = name.replace(/[-_]{2,}/g, "_");
+    name = name.trim();
+    if (!name) {
+      name = `KOC_${Date.now().toString(36)}`;
+    }
+    // TikTok giới hạn độ dài Tên lời mời tối đa chính xác 30 ký tự (0/30)
+    if (name.length > 30) {
+      name = name.slice(0, 30).trim();
+    }
+    return name;
+  }
+
+  // Tên nhóm chuẩn hóa: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_08-10_001)
   function tenNhomTheoLan(groupName, soNhom) {
-    const ten = String(groupName || "").trim();
-    if (/_\d{2}\/\d{2}_\d{3}$/.test(ten)) return ten;
+    let ten = String(groupName || "").trim();
+    ten = ten.replace(/[/\\:*?"<>|~`!@#$%^&=+{}\[\];]/g, "-").replace(/\s+/g, " ").replace(/[-_]{2,}/g, "_");
+    // Nếu tên đã chuẩn định dạng hợp lệ đuôi _DD-MM_XXX
+    if (/_\d{2}[-_]\d{2}_\d{3}$/.test(ten)) {
+      return sanitizeInvitationName(ten);
+    }
     const lan = Math.max(1, Number(soNhom || 1));
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, "0");
     const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const cleanTen = ten.replace(/_\d{2}\/\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").trim();
-    const idxStr = String(lan).padStart(3, "0");
-    return `${cleanTen}_${dd}/${mm}_${idxStr}`;
+    const cleanTen = ten.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").trim();
+    const suffix = `_${dd}-${mm}_${String(lan).padStart(3, "0")}`; // Dài 11 ký tự: _08-10_001
+    // Giới hạn phần prefix tối đa 30 - 11 = 19 ký tự để đảm bảo tổng độ dài luôn <= 30 ký tự
+    const maxPrefixLen = Math.max(5, 30 - suffix.length);
+    const prefix = cleanTen.slice(0, maxPrefixLen).trim();
+    const formatted = `${prefix}${suffix}`;
+    return sanitizeInvitationName(formatted);
   }
 
   // DỰNG BODY CREATE KHỚP 100% HAR ENTRY 137 (TUYỆT ĐỐI KHÔNG CÓ has_flash_sale)
@@ -244,9 +301,11 @@
       .replace(/\{\{\s*creators?_?username\s*\}\}/gi, "{{user_name}}")
       .replace(/\{\{\s*creators?\s+username\s*\}\}/gi, "{{user_name}}");
 
+    const finalGroupName = sanitizeInvitationName(groupName || draft.title || "KOCVIP");
+
     return {
       invitation_group: {
-        name: groupName || draft.title || "",
+        name: finalGroupName,
         message,
         contacts_info: contacts,
         group_type: 1,
@@ -382,22 +441,161 @@
     return /^\d{17,21}$/.test(s) && !s.endsWith("00000000");
   }
 
-  async function resolveMissingOecIds(recipients, shopId, region) {
+  let lastCaptchaResolvedAt = 0;
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "KOCVIP_PROGRESS_UPDATE" && message?.payload?.status === "captcha_resolved") {
+      lastCaptchaResolvedAt = Date.now();
+    }
+  });
+
+  function isCaptchaPresentOnPage() {
+    const selectors = [
+      ".captcha-verify-container",
+      "#captcha-verify-image",
+      ".secsdk-captcha-drag-icon",
+      "[data-testid='whirl-inner-img']",
+      ".captcha_verify_container",
+      ".secsdk_captcha_modal",
+      ".captcha-disable-scroll",
+      "[class*='captcha-verify']",
+      "[id*='captcha-verify']",
+      "iframe[src*='captcha']",
+      "iframe[src*='verify']",
+      "[data-testid*='captcha']",
+      ".verify-bar-close",
+    ];
+    for (const sel of selectors) {
+      try {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0)) {
+          return true;
+        }
+      } catch {}
+    }
+    return false;
+  }
+
+  function playCaptchaAlertBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.35);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } catch {}
+  }
+
+  async function waitForCaptchaResolution(controller, manifest) {
+    if (controller?.cancelled) return { cancelled: true };
+    emitLog("[KOC VIP] ⚠️ TikTok yêu cầu giải Captcha trên màn hình! Đang tạm dừng chờ bạn giải xong để tự động tiếp tục...", true);
+    playCaptchaAlertBeep();
+
+    const prevStatus = currentActiveRun?.status || "running";
+    if (currentActiveRun) {
+      currentActiveRun.status = "waiting_captcha";
+      renderMiniBar();
+    }
+
+    // Tự động thu nhỏ bảng to để người dùng nhìn thấy ngay khung giải Captcha trên màn hình TikTok
+    hideModal();
+
+    try {
+      chrome.runtime.sendMessage({
+        type: "KOCVIP_NOTIFY_CAPTCHA",
+        payload: {
+          serverRunId: manifest?.serverRunId,
+          message: "TikTok đang yêu cầu giải Captcha trên màn hình. Hãy bấm vào đây để mở tab TikTok và giải ngay!"
+        }
+      });
+    } catch {}
+    emitProgress({
+      serverRunId: manifest?.serverRunId,
+      status: "waiting_captcha",
+      message: "⚠️ TikTok yêu cầu giải Captcha trên màn hình — Tiện ích đang chờ bạn giải xong để tự động tiếp tục..."
+    });
+
+    const maxWaitMs = 300000; // 5 phút
+    const startTime = Date.now();
+    let captchaWasSeen = isCaptchaPresentOnPage();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      if (controller?.cancelled) break;
+      if (controller) controller.lastActivityAt = Date.now();
+
+      const currentlyPresent = isCaptchaPresentOnPage();
+      if (currentlyPresent) {
+        captchaWasSeen = true;
+      }
+
+      const recentlyResolved = Date.now() - lastCaptchaResolvedAt < 4000;
+      if ((captchaWasSeen && !currentlyPresent) || recentlyResolved) {
+        emitLog("[KOC VIP] ✅ Đã giải xong Captcha! Đang đợi 2 giây để TikTok cập nhật phiên...");
+        await sleep(2000);
+        showModal(manifest?.serverRunId);
+        break;
+      }
+
+      await sleep(700);
+    }
+
+    if (controller?.cancelled) {
+      if (currentActiveRun) {
+        currentActiveRun.status = "cancelled";
+        currentActiveRun.completed = true;
+        renderMiniBar();
+      }
+      return { cancelled: true };
+    }
+
+    if (currentActiveRun && currentActiveRun.status === "waiting_captcha") {
+      currentActiveRun.status = prevStatus === "waiting_captcha" ? "running" : prevStatus;
+      renderMiniBar();
+    }
+    emitProgress({
+      serverRunId: manifest?.serverRunId,
+      status: "running",
+      message: "Đã giải xong Captcha. Đang tiếp tục đợt mời..."
+    });
+    return { resolved: true };
+  }
+
+  async function resolveMissingOecIds(recipients, shopId, region, controller, manifest) {
     const missing = recipients.filter(r => !isOecIdValid(r.creatorOecId));
     if (!missing.length) return;
     const batchSize = 50;
     for (let i = 0; i < missing.length; i += batchSize) {
+      if (controller?.cancelled) break;
+      if (isCaptchaPresentOnPage()) {
+        await waitForCaptchaResolution(controller, manifest);
+      }
       const slice = missing.slice(i, i + batchSize);
       const handleNames = slice.map(r => String(r.handle || "").replace(/^@/, "").trim()).filter(Boolean);
       if (!handleNames.length) continue;
       try {
-        const res = await executeInPage({
+        let res = await executeInPage({
           method: "POST",
           path: "/api/v1/oec/affiliate/crm/creator/import_check",
           body: { handle_names: handleNames },
           shopId,
           region,
         });
+        if (res?.body?.captchaRequired || isCaptchaPresentOnPage()) {
+          await waitForCaptchaResolution(controller, manifest);
+          res = await executeInPage({
+            method: "POST",
+            path: "/api/v1/oec/affiliate/crm/creator/import_check",
+            body: { handle_names: handleNames },
+            shopId,
+            region,
+          });
+        }
         const foundList = res?.body?.data?.creators || res?.body?.creators || [];
         const foundMap = new Map();
         for (const item of foundList) {
@@ -413,28 +611,91 @@
       } catch (err) {
         console.warn("[KOC VIP] Tra cứu ID KOC lỗi:", err);
       }
-      await sleep(500);
+      await cancellableSleep(3500 + Math.floor(Math.random() * 1500), manifest.serverRunId);
     }
   }
 
   // Thực thi 1 Chunk KOC
   async function executeChunk(manifest, chunk, controller) {
+    if (controller?.cancelled) return { state: "cancelled" };
     if (TERMINAL_CHUNK_STATUSES.has(chunk.status)) return { state: "settled" };
     const pageContext = getShopContext();
     const shopId = (!manifest.shopId || manifest.shopId === "default") ? pageContext.shopId : manifest.shopId;
     const region = manifest.region && manifest.region !== "VN" && manifest.region !== "DEFAULT" ? manifest.region : (pageContext.region || "VN");
-    const NHIP_TOI_THIEU_MS = 350;
+    // Độ trễ an toàn lấy từ manifest (người dùng chọn), min 3000ms, mặc định 7500ms (chuẩn ~30s / camp)
+    const NHIP_TOI_THIEU_MS = Math.max(3000, Number(manifest.safeDelayMs || 7500));
+    const JITTER_MS = Math.round(NHIP_TOI_THIEU_MS * 0.3); // Biến động ngẫu nhiên ±30% để giả lập thao tác người dùng thật
     let nhipLenhCuoi = 0;
 
-    const callTikTok = async req => {
-      if (controller) controller.lastActivityAt = Date.now();
-      const cachLan = Date.now() - nhipLenhCuoi;
-      if (cachLan < NHIP_TOI_THIEU_MS) {
-        const delay = NHIP_TOI_THIEU_MS - cachLan + Math.floor(Math.random() * 200);
-        await cancellableSleep(delay, manifest.serverRunId);
+    const callTikTok = async (req, maxRetries = 3) => {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (controller?.cancelled) {
+          const cancelErr = new Error("Đợt mời đã bị người dùng hủy bỏ");
+          cancelErr.cancelled = true;
+          throw cancelErr;
+        }
+        if (controller) controller.lastActivityAt = Date.now();
+
+        if (isCaptchaPresentOnPage()) {
+          const capRes = await waitForCaptchaResolution(controller, manifest);
+          if (controller?.cancelled || capRes?.cancelled) {
+            const cancelErr = new Error("Đợt mời đã bị người dùng hủy bỏ");
+            cancelErr.cancelled = true;
+            throw cancelErr;
+          }
+        }
+
+        const cachLan = Date.now() - nhipLenhCuoi;
+        if (cachLan < NHIP_TOI_THIEU_MS) {
+          const delay = NHIP_TOI_THIEU_MS - cachLan + Math.floor(Math.random() * JITTER_MS);
+          await cancellableSleep(delay, manifest.serverRunId);
+        } else {
+          // Luôn có 1 khoảng nghỉ ngẫu nhiên 1.0s - 2.0s giả lập hành vi bấm tay của người dùng
+          await cancellableSleep(Math.floor(Math.random() * 1000) + 1000, manifest.serverRunId);
+        }
+        nhipLenhCuoi = Date.now();
+
+        let res;
+        try {
+          res = await executeInPage(req);
+        } catch (err) {
+          if (controller?.cancelled) throw err;
+          if (attempt < maxRetries && (isCaptchaPresentOnPage() || err.message?.includes("Captcha"))) {
+            const capRes = await waitForCaptchaResolution(controller, manifest);
+            if (controller?.cancelled || capRes?.cancelled) throw err;
+            continue;
+          }
+          throw err;
+        }
+
+        if (controller?.cancelled) {
+          const cancelErr = new Error("Đợt mời đã bị người dùng hủy bỏ");
+          cancelErr.cancelled = true;
+          throw cancelErr;
+        }
+
+        // ✅ CHỈ coi là Captcha khi page-executor báo captchaRequired THỰC SỰ (đã lọc sạch verify/verification thông thường)
+        // TUYỆT ĐỐI không bắt chữ "verify" trong message vì sẽ nhầm với lỗi validate tham số
+        const isCaptchaSignal = res?.body?.captchaRequired === true ||
+          res?.body?.code === 30004009 ||
+          isCaptchaPresentOnPage() ||
+          (req.path.includes("/create") && Number(res?.body?.code ?? 0) === 0 && !res?.body?.data?.invitation?.id && isCaptchaPresentOnPage());
+
+        if (isCaptchaSignal && attempt < maxRetries && !controller?.cancelled) {
+          emitLog(`[KOCVIP] TikTok yêu cầu xác minh Captcha tại API ${req.path}. Đang tạm dừng chờ bạn giải Captcha...`, true);
+          const capRes = await waitForCaptchaResolution(controller, manifest);
+          if (controller?.cancelled || capRes?.cancelled) {
+            const cancelErr = new Error("Đợt mời đã bị người dùng hủy bỏ");
+            cancelErr.cancelled = true;
+            throw cancelErr;
+          }
+          emitLog(`[KOCVIP] Đang gọi lại API ${req.path} sau khi giải Captcha thành công...`);
+          await cancellableSleep(1500, manifest.serverRunId);
+          continue;
+        }
+
+        return res;
       }
-      nhipLenhCuoi = Date.now();
-      return executeInPage(req);
     };
 
     // 1. Đảm bảo KOC có creatorOecId
@@ -444,7 +705,7 @@
     if (validBefore < (chunk.recipients?.length || 0)) {
       const missingCount = (chunk.recipients?.length || 0) - validBefore;
       emitLog(`[KOCVIP] Chunk ${chunk.chunkId}: Có ${missingCount} KOC chưa có OEC ID -> Đang gọi TikTok import_check...`);
-      await resolveMissingOecIds(chunk.recipients || [], shopId, region);
+      await resolveMissingOecIds(chunk.recipients || [], shopId, region, controller, manifest);
       const validAfter = (chunk.recipients || []).filter(r => isOecIdValid(r.creatorOecId)).length;
       emitLog(`[KOCVIP] Chunk ${chunk.chunkId}: Sau import_check, có ${validAfter}/${chunk.recipients?.length || 0} KOC hợp lệ.`);
     }
@@ -688,7 +949,7 @@
     const createBody = buildCreateBody(manifest.draft || {}, pending, tenNhom);
     emitLog(`[KOCVIP API] Đang gửi API tạo nhóm lời mời "${tenNhom}" cho ${pending.length} KOC...`);
 
-    const createRes = await callTikTok({
+    let createRes = await callTikTok({
       method: "POST",
       path: "/api/v1/oec/affiliate/seller/invitation_group/create",
       shopId,
@@ -696,8 +957,8 @@
       body: createBody,
     });
 
-    const createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
-    const createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
+    let createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
+    let createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
 
     // Xử lý hết hạn mức ngày
     if (createCode === 16024034 || createCode === 16024035) {
@@ -709,17 +970,79 @@
     }
 
     // Theo HAR Entry 137, ID nằm trong data.invitation.id
-    const groupId = String(
+    let groupId = String(
       createRes?.body?.data?.invitation?.id ||
+      createRes?.body?.data?.invitation_group?.id ||
       createRes?.body?.data?.invitation_group_id ||
-      createRes?.body?.invitation_group_id ||
       createRes?.body?.data?.id ||
+      createRes?.body?.invitation?.id ||
+      createRes?.body?.invitation_group_id ||
+      createRes?.body?.id ||
       ""
     );
 
+    // Safety net: nếu groupId trống và phát hiện Captcha
+    if (!groupId && (isCaptchaPresentOnPage() || createRes?.body?.captchaRequired || createCode === 30004009)) {
+      emitLog(`[KOCVIP] TikTok kích hoạt Captcha khi tạo nhóm "${tenNhom}". Đang tạm dừng chờ bạn giải...`, true);
+      await waitForCaptchaResolution(controller, manifest);
+      emitLog(`[KOCVIP] Đang gọi lại API tạo nhóm "${tenNhom}" sau khi giải Captcha thành công...`);
+      await cancellableSleep(1500, manifest.serverRunId);
+      createRes = await callTikTok({
+        method: "POST",
+        path: "/api/v1/oec/affiliate/seller/invitation_group/create",
+        shopId,
+        shopRegion: region,
+        body: createBody,
+      });
+      createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
+      createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
+      groupId = String(
+        createRes?.body?.data?.invitation?.id ||
+        createRes?.body?.data?.invitation_group?.id ||
+        createRes?.body?.data?.invitation_group_id ||
+        createRes?.body?.data?.id ||
+        createRes?.body?.invitation?.id ||
+        createRes?.body?.invitation_group_id ||
+        createRes?.body?.id ||
+        ""
+      );
+    }
+
     if (!createRes?.ok || createCode !== 0 || !groupId) {
-      const errMsg = createRes?.body?.message || createRes?.error || "Không tạo được nhóm lời mời trên TikTok";
+      let errMsg = createRes?.body?.message || createRes?.error || "Không tạo được nhóm lời mời trên TikTok";
       emitLog(`[KOCVIP API LỖI] create nhóm "${tenNhom}" THẤT BẠI: HTTP ${createStatus}, Code ${createCode}: ${errMsg}`, true);
+
+      // XỬ LÝ ĐẶC BIỆT LỖI 98001004 / 16024002 (invitation name invalid):
+      // Tự động thử lại ngay lập tức với tên an toàn ngẫu nhiên chuẩn ASCII để đợt mời tiếp tục chạy trơn tru
+      if (createCode === 98001004 || createCode === 16024002 || errMsg.toLowerCase().includes("invitation name")) {
+        const fallbackName = `KOC_${Date.now().toString(36)}_${Math.floor(Math.random() * 1000)}`;
+        emitLog(`[KOCVIP TỰ ĐỘNG THỬ LẠI] Tên nhóm không hợp lệ (Mã ${createCode}) -> Đang thử lại với tên an toàn "${fallbackName}"...`);
+        const fallbackBody = buildCreateBody(manifest.draft || {}, pending, fallbackName);
+        createRes = await callTikTok({
+          method: "POST",
+          path: "/api/v1/oec/affiliate/seller/invitation_group/create",
+          shopId,
+          shopRegion: region,
+          body: fallbackBody,
+        });
+        createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
+        createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
+        groupId = String(
+          createRes?.body?.data?.invitation?.id ||
+          createRes?.body?.data?.invitation_group?.id ||
+          createRes?.body?.data?.invitation_group_id ||
+          createRes?.body?.data?.id ||
+          createRes?.body?.invitation?.id ||
+          createRes?.body?.invitation_group_id ||
+          createRes?.body?.id ||
+          ""
+        );
+        if (createRes?.ok && createCode === 0 && groupId) {
+          emitLog(`[KOCVIP TẠO NHÓM THÀNH CÔNG] Đã tạo nhóm thành công với tên an toàn "${fallbackName}" (ID: ${groupId})!`);
+        } else {
+          errMsg = createRes?.body?.message || createRes?.error || errMsg;
+        }
+      }
 
       // XỬ LÝ ĐẶC BIỆT LỖI 16024016 (The invitation failed because the creator is linked with a shop account):
       // Trong nhóm có KOC là tài khoản chính thức hoặc tiếp thị của một Shop TikTok (không được nhận lời mời Affiliate).
@@ -789,7 +1112,8 @@
             emitLog(`[KOCVIP] KOC ${firstKocName} ngoại lệ: ${eFirst.message}`, true);
             recipients = recipients.map(r => r.creatorOecId === firstKoc.creatorOecId ? recipientStatusPatch(r, "failed", eFirst.message) : r);
           }
-          await sleep(350);
+          // Delay humanized giữa các lần tìm KOC hợp lệ đầu tiên (tránh rate limit khi có nhiều lỗi 16024016)
+          await cancellableSleep(NHIP_TOI_THIEU_MS + Math.floor(Math.random() * JITTER_MS), manifest.serverRunId);
         }
 
         // Bước 2: Thêm tất cả các KOC còn lại vào ĐÚNG NHÓM CHÍNH ĐÃ TẠO (creators_add), không tạo thêm nhóm mới!
@@ -835,7 +1159,8 @@
               emitLog(`[KOCVIP] KOC ${nextKocName} ngoại lệ: ${eAdd.message}`, true);
               recipients = recipients.map(r => r.creatorOecId === nextKoc.creatorOecId ? recipientStatusPatch(r, "failed", eAdd.message) : r);
             }
-            await sleep(350);
+            // Delay humanized giữa các lần thêm KOC (tránh rate limit khi gom nhóm)
+            await cancellableSleep(NHIP_TOI_THIEU_MS + Math.floor(Math.random() * JITTER_MS), manifest.serverRunId);
           }
         }
 
@@ -978,7 +1303,12 @@
         currentChunkIndex: 1,
         totalChunks: chunks.length,
         completed: false,
+        logs: [], // Cache log để phục hồi khi modal mở lại
       };
+      try {
+        localStorage.setItem("kocvip_last_run_id", manifest.serverRunId);
+        chrome.storage.local.set({ kocvip_active_run_id: manifest.serverRunId, kocvip_last_run_id: manifest.serverRunId });
+      } catch {}
       startMiniBarTimer();
       renderMiniBar();
 
@@ -1046,9 +1376,7 @@
         }
 
         if (res.state === "failed") {
-          exitReason = `Dừng đợt mời do lỗi tại chunk ${chunk.chunkId} (Mã lỗi ${res.code || 0}): ${res.error || "TikTok từ chối tạo nhóm"}`;
-          emitLog(`[KOCVIP] [DỪNG TIẾN TRÌNH] ${exitReason}`, true);
-          break;
+          emitLog(`[KOCVIP CẢNH BÁO] Chunk ${chunk.chunkId} thất bại (${res.error || "TikTok từ chối tạo nhóm"}). Tự động tiếp tục xử lý các nhóm KOC còn lại...`, true);
         }
 
         if (manifest.dryRunOnly) {
@@ -1065,6 +1393,15 @@
 
         const dbPending = chunks.filter(c => !TERMINAL_CHUNK_STATUSES.has(c.status));
         pending = dbPending.filter(c => c.chunkId !== chunk.chunkId);
+
+        // ✅ Độ trễ an toàn giữa các chiến dịch (camp/chunk) mời KOC để chống bị TikTok quét
+        if (pending.length && !controller.cancelled && !manifest.dryRunOnly) {
+          const safeDelay = Math.max(3000, Number(manifest.safeDelayMs || 7500));
+          const jitter = Math.floor(Math.random() * (safeDelay * 0.4));
+          const totalDelayMs = safeDelay + jitter;
+          emitLog(`[KOCVIP] ⏳ Nghỉ ngơi ${(totalDelayMs / 1000).toFixed(1)}s trước khi tạo chiến dịch tiếp theo để tránh bị quét TikTok...`);
+          await cancellableSleep(totalDelayMs, manifest.serverRunId);
+        }
       }
 
       watchdogTimer();
@@ -1087,6 +1424,10 @@
         currentActiveRun.finishedAt = Date.now();
         currentActiveRun.status = finalStatus;
         renderMiniBar();
+        try {
+          localStorage.setItem("kocvip_last_run_id", manifest.serverRunId);
+          chrome.storage.local.set({ kocvip_last_run_id: manifest.serverRunId });
+        } catch {}
       }
 
       try {
@@ -1103,6 +1444,10 @@
         currentActiveRun.finishedAt = Date.now();
         currentActiveRun.status = "failed";
         renderMiniBar();
+        try {
+          localStorage.setItem("kocvip_last_run_id", manifest.serverRunId);
+          chrome.storage.local.set({ kocvip_last_run_id: manifest.serverRunId });
+        } catch {}
       }
     } finally {
       activeRuns.delete(manifest.serverRunId);
@@ -1148,10 +1493,29 @@
     }
 
     if (type === "KOCVIP_LOCAL_INVITE_STOP") {
-      const controller = activeRuns.get(payload.serverRunId);
-      if (controller) { controller.cancelled = true; controller.paused = false; }
-      localDb("cancelRun", { serverRunId: payload.serverRunId });
-      sendResponse({ success: true });
+      const runId = payload.serverRunId || currentActiveRun?.serverRunId;
+      if (runId) {
+        const controller = activeRuns.get(runId);
+        if (controller) { controller.cancelled = true; controller.paused = false; }
+        localDb("cancelRun", { serverRunId: runId });
+      }
+      activeRuns.forEach(c => { c.cancelled = true; c.paused = false; });
+      if (currentActiveRun) {
+        currentActiveRun.status = "cancelled";
+        currentActiveRun.completed = true;
+        currentActiveRun.finishedAt = Date.now();
+        renderMiniBar();
+      }
+      emitProgress({
+        serverRunId: runId,
+        status: "cancelled",
+        message: "Đã hủy bỏ đợt mời theo yêu cầu."
+      });
+      try {
+        localStorage.removeItem("kocvip_last_run_id");
+        chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+      } catch {}
+      sendResponse({ success: true, data: { stopped: true } });
       return false;
     }
 
@@ -1472,12 +1836,42 @@
     }
   }
 
-  // Lắng nghe đóng / thu nhỏ / phóng to từ bên trong iframe
+  // Lắng nghe đóng / thu nhỏ / phóng to / hủy từ bên trong iframe
   window.addEventListener("message", (e) => {
     if (e.data?.type === "KOCVIP_CLOSE_OVERLAY" || e.data?.type === "KOCVIP_MINIMIZE_OVERLAY") {
       hideModal();
     } else if (e.data?.type === "KOCVIP_TOGGLE_MAXIMIZE") {
       toggleMaximize(e.data.isMaximized);
+    } else if (e.data?.type === "KOCVIP_INVITE_CONTROL" && e.data.payload?.action === "stop") {
+      const runId = e.data.payload.serverRunId || currentActiveRun?.serverRunId;
+      if (runId) {
+        const controller = activeRuns.get(runId);
+        if (controller) { controller.cancelled = true; controller.paused = false; }
+        localDb("cancelRun", { serverRunId: runId });
+      }
+      activeRuns.forEach(c => { c.cancelled = true; c.paused = false; });
+      if (currentActiveRun) {
+        currentActiveRun.status = "cancelled";
+        currentActiveRun.completed = true;
+        currentActiveRun.finishedAt = Date.now();
+        renderMiniBar();
+      }
+      emitProgress({
+        serverRunId: runId,
+        status: "cancelled",
+        message: "Đã hủy bỏ đợt mời theo yêu cầu."
+      });
+      try {
+        localStorage.removeItem("kocvip_last_run_id");
+        chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+      } catch {}
+    }
+  });
+
+  // Phím tắt Esc trên trang để thu nhỏ modal
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlayHost && overlayHost.style.display === "flex") {
+      hideModal();
     }
   });
 
@@ -1828,6 +2222,29 @@
       if (btnPause) btnPause.style.display = "none";
       if (btnStop) btnStop.style.display = "none";
       if (btnClose) btnClose.style.display = "inline-flex";
+    } else if (currentActiveRun.status === "waiting_captcha") {
+      if (elIcon) {
+        elIcon.textContent = "⚠️";
+        elIcon.className = "kocvip-mb-pulse-icon";
+      }
+      if (elTitle) {
+        elTitle.textContent = "Chờ giải Captcha...";
+        elTitle.style.color = "#d97706";
+      }
+      if (mb) {
+        mb.style.borderColor = "#f59e0b";
+      }
+      if (elPct) {
+        elPct.style.color = "#d97706";
+      }
+      if (elTimer) {
+        elTimer.style.color = "#b45309";
+        elTimer.style.background = "#fffbeb";
+        elTimer.style.borderColor = "#fde68a";
+      }
+      if (btnPause) btnPause.style.display = "none";
+      if (btnStop) btnStop.style.display = "inline-flex";
+      if (btnClose) btnClose.style.display = "none";
     } else if (isPaused) {
       if (elIcon) {
         elIcon.textContent = "⏸️";
@@ -1942,20 +2359,55 @@
     }
     initInPageOverlay();
     if (overlayHost) {
-      const runId = targetRunId || currentActiveRun?.serverRunId;
+      // Chỉ mở tiến trình nếu đợt mời ĐANG CHẠY THỰC SỰ (chưa hoàn tất, chưa hủy, chưa thất bại)
+      const isCurrentlyRunning = currentActiveRun && !currentActiveRun.completed &&
+        currentActiveRun.status !== "completed" && currentActiveRun.status !== "cancelled" && currentActiveRun.status !== "failed";
+      const runId = targetRunId || (isCurrentlyRunning ? currentActiveRun.serverRunId : null);
       const targetUrl = safeGetURL(runId ? `ui/index.html?runId=${encodeURIComponent(runId)}` : "ui/index.html");
+
+      const sendOpenRunMsg = () => {
+        if (!runId || !overlayIframe?.contentWindow) return;
+        try {
+          const snap = currentActiveRun ? { ...currentActiveRun } : null;
+          overlayIframe.contentWindow.postMessage({
+            type: "KOCVIP_OPEN_RUN",
+            serverRunId: runId,
+            snapshot: snap,
+            // Gửi kèm log đã cache để UI replay lại sau khi mở to (tránh mất log)
+            cachedLogs: (snap?.logs || []).slice(-200),
+          }, "*");
+        } catch {}
+      };
+
       if (overlayIframe) {
-        if (!overlayIframe.src || overlayIframe.src === "about:blank" || (runId && !overlayIframe.src.includes(runId))) {
+        const needsReload = !overlayIframe.src ||
+          overlayIframe.src === "about:blank" ||
+          (runId && !overlayIframe.src.includes(runId)) ||
+          (!runId && overlayIframe.src.includes("runId="));
+
+        if (needsReload) {
+          overlayIframe.onload = () => {
+            if (runId) {
+              sendOpenRunMsg();
+              setTimeout(sendOpenRunMsg, 100);
+              setTimeout(sendOpenRunMsg, 300);
+            }
+          };
           overlayIframe.src = targetUrl;
-        } else if (runId && overlayIframe.contentWindow) {
-          try {
-            overlayIframe.contentWindow.postMessage({ type: "KOCVIP_OPEN_RUN", serverRunId: runId }, "*");
-          } catch {}
+        } else if (runId) {
+          sendOpenRunMsg();
+          setTimeout(sendOpenRunMsg, 100);
+          setTimeout(sendOpenRunMsg, 300);
         }
       }
       if (runId) {
         try {
-          chrome.storage.local.set({ kocvip_active_run_id: runId, kocvip_last_run_id: runId });
+          chrome.storage.local.set({ kocvip_active_run_id: runId });
+        } catch {}
+      } else {
+        try {
+          chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id"]);
+          localStorage.removeItem("kocvip_last_run_id");
         } catch {}
       }
       const isSavedMax = localStorage.getItem("kocvip_is_maximized") === "true";

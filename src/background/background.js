@@ -130,8 +130,131 @@ async function findTikTokTab() {
   return sorted[0] || null;
 }
 
+async function findAffiliateTab() {
+  const tabs = await chrome.tabs.query({
+    url: [
+      "https://affiliate.tiktok.com/*",
+      "https://affiliate-us.tiktok.com/*",
+      "https://affiliate.tiktokglobalshop.com/*",
+      "https://affiliate.tiktokshopglobalselling.com/*",
+    ]
+  });
+  const sorted = tabs.filter(t => !t.discarded).sort((a, b) => (Number(!!b.active) - Number(!!a.active)));
+  return sorted[0] || null;
+}
+
+async function resolveAffiliateTabId(sender, shopId = "", region = "VN") {
+  if (sender?.tab?.id) {
+    try {
+      const tab = await chrome.tabs.get(sender.tab.id);
+      if (tab?.url && /affiliate(-us)?\.tiktok/i.test(tab.url)) {
+        return tab.id;
+      }
+    } catch {}
+  }
+
+  const existing = await findAffiliateTab();
+  if (existing?.id) return existing.id;
+
+  // Nếu người dùng đang mở tab Seller Center (seller-vn.tiktok.com):
+  // Tự động mở tab Affiliate tương ứng với Shop trong chế độ nền để gửi lời mời
+  const targetRegion = region || "VN";
+  const targetShopId = String(shopId || "").trim();
+  const affUrl = (targetShopId && targetShopId !== "default")
+    ? `https://affiliate.tiktok.com/affiliate/collaboration/target-invitation?shop_region=${targetRegion}&shop_id=${targetShopId}`
+    : `https://affiliate.tiktok.com/affiliate/collaboration/open-collaboration?shop_region=${targetRegion}`;
+
+  console.log("[KOC VIP] Tự động mở tab TikTok Affiliate để gửi lời mời:", affUrl);
+  const newTab = await chrome.tabs.create({ url: affUrl, active: false });
+
+  await new Promise(resolve => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) { resolved = true; chrome.tabs.onUpdated.removeListener(listener); resolve(); }
+    }, 15000);
+
+    function listener(tabId, info) {
+      if (tabId === newTab.id && info.status === "complete") {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+
+  await ensureScriptsInTab(newTab.id);
+  await new Promise(r => setTimeout(r, 1200));
+  return newTab.id;
+}
+
+// Quản lý thông báo Desktop hệ thống khi TikTok yêu cầu giải Captcha
+let activeCaptchaNotificationId = null;
+
+function showCaptchaDesktopNotification(msg) {
+  const notifId = "kocvip_captcha_" + Date.now();
+  activeCaptchaNotificationId = notifId;
+  const messageText = msg || "TikTok đang yêu cầu giải Captcha trên màn hình. Hãy bấm vào đây để mở tab TikTok và giải ngay!";
+
+  try {
+    chrome.notifications.create(notifId, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title: "⚠️ TikTok Yêu Cầu Giải Captcha!",
+      message: messageText,
+      priority: 2,
+      requireInteraction: true // Giữ thông báo trên màn hình macOS / Windows cho đến khi bấm
+    });
+  } catch (err) {
+    console.warn("[KOC VIP] Lỗi gửi thông báo Desktop:", err);
+  }
+}
+
+function clearCaptchaDesktopNotification() {
+  if (activeCaptchaNotificationId) {
+    try {
+      chrome.notifications.clear(activeCaptchaNotificationId);
+    } catch {}
+    activeCaptchaNotificationId = null;
+  }
+}
+
+// Bấm vào thông báo Desktop thì tự động focus chuyển sang tab TikTok
+chrome.notifications.onClicked.addListener(async (notifId) => {
+  if (notifId && notifId.startsWith("kocvip_captcha_")) {
+    try {
+      const tab = await findTikTokTab();
+      if (tab?.id) {
+        await chrome.tabs.update(tab.id, { active: true });
+        if (tab.windowId) {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+      }
+    } catch {}
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const { type, payload = {} } = message || {};
+
+  // Gửi thông báo Desktop khi phát hiện Captcha
+  if (type === "KOCVIP_NOTIFY_CAPTCHA") {
+    showCaptchaDesktopNotification(payload?.message);
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Tự động quản lý thông báo Desktop qua tiến trình
+  if (type === "KOCVIP_PROGRESS_UPDATE") {
+    if (payload?.status === "waiting_captcha") {
+      showCaptchaDesktopNotification(payload?.message);
+    } else if (payload?.status === "captcha_resolved" || payload?.status === "running" || payload?.completed) {
+      clearCaptchaDesktopNotification();
+    }
+  }
 
   // Mở tab UI toàn màn hình khi cần
   if (type === "KOCVIP_OPEN_FULL_UI") {
@@ -448,7 +571,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // 3b. Tra cứu Username sang creator_oec_id qua import_check
   if (type === "KOCVIP_LOOKUP_HANDLES") {
     (async () => {
-      const targetTabId = await resolveTikTokTabId(_sender);
+      const targetTabId = await resolveAffiliateTabId(_sender);
       if (!targetTabId) throw new Error("Chưa mở tab TikTok Shop Affiliate (affiliate.tiktok.com)");
 
       const rawHandles = Array.isArray(payload.handles) ? payload.handles : [];
@@ -508,15 +631,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  // 4. Bắt đầu đợt mời KOC (Dispatch sang Content Script trên tab TikTok)
+  // 4. Bắt đầu đợt mời KOC (Dispatch sang Content Script trên tab TikTok Affiliate)
   if (type === "KOCVIP_START_INVITE") {
     (async () => {
-      const targetTabId = await resolveTikTokTabId(_sender);
-      if (!targetTabId) throw new Error("Không tìm thấy tab TikTok Affiliate. Hãy mở tab https://affiliate.tiktok.com và đăng nhập shop.");
+      const shopId = payload.manifest?.shopId || "";
+      const region = payload.manifest?.region || "VN";
+      const targetTabId = await resolveAffiliateTabId(_sender, shopId, region);
+      if (!targetTabId) throw new Error("Không thể kết nối tab TikTok Affiliate. Hãy mở tab https://affiliate.tiktok.com và đăng nhập shop.");
 
       if (payload.manifest?.draft?.shareAfterInvite) {
-        const region = payload.manifest?.region || "VN";
-        const shopId = payload.manifest?.shopId || "";
         chrome.tabs.create({
           url: `https://affiliate.tiktok.com/connection/im?shop_region=${region}&shop_id=${shopId}`,
           active: false,
@@ -536,23 +659,42 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   // 5. Điều khiển tạm dừng / tiếp tục / hủy đợt mời
   if (type === "KOCVIP_INVITE_CONTROL") {
+    if (payload?.action === "stop") {
+      try {
+        chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+      } catch {}
+    }
     (async () => {
-      const targetTabId = await resolveTikTokTabId(_sender);
-      if (!targetTabId) throw new Error("Không tìm thấy tab TikTok Affiliate");
-
       const actionType = payload.action === "pause"
         ? "KOCVIP_LOCAL_INVITE_PAUSE"
         : payload.action === "resume"
           ? "KOCVIP_LOCAL_INVITE_RESUME"
           : "KOCVIP_LOCAL_INVITE_STOP";
 
-      return await sendToMainFrame(targetTabId, {
-        type: actionType,
-        payload: { serverRunId: payload.serverRunId },
+      // Gửi lệnh điều khiển tới TẤT CẢ các tab TikTok đang mở để dừng tức thì mọi tiến trình chạy ngầm
+      const tabs = await chrome.tabs.query({
+        url: [
+          "https://affiliate.tiktok.com/*",
+          "https://affiliate-us.tiktok.com/*",
+          "https://affiliate.tiktokglobalshop.com/*",
+          "https://affiliate.tiktokshopglobalselling.com/*",
+          "https://seller-vn.tiktok.com/*",
+          "https://seller.tiktok.com/*",
+          "https://seller-us.tiktok.com/*",
+        ]
       });
+      for (const t of tabs) {
+        if (t.id && !t.discarded) {
+          chrome.tabs.sendMessage(t.id, {
+            type: actionType,
+            payload: { serverRunId: payload.serverRunId },
+          }, { frameId: 0 }).catch(() => {});
+        }
+      }
+      return { success: true, data: { stopped: true } };
     })()
       .then(data => sendResponse({ success: true, data }))
-      .catch(err => sendResponse({ success: false, error: String(err?.message || err) }));
+      .catch(() => sendResponse({ success: true, data: { stopped: true } }));
     return true;
   }
 });

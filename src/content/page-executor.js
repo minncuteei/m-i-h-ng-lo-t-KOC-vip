@@ -199,10 +199,12 @@
       body = {
         code: -1,
         nonJson: true,
-        retryable: true,
+        retryable: response.status >= 500,
         httpStatus: response.status,
         contentType: response.headers.get("content-type") || "",
-        message: `TikTok trả phản hồi không hợp lệ (HTTP ${response.status || 0}); hệ thống sẽ giảm tốc và thử lại.`,
+        message: response.status === 404
+          ? `Đường dẫn API TikTok không tồn tại trên trang này (HTTP 404). Vui lòng đảm bảo đang chạy trên tab TikTok Affiliate.`
+          : `TikTok trả phản hồi không hợp lệ (HTTP ${response.status || 0}); hệ thống sẽ giảm tốc và thử lại.`,
       };
     }
 
@@ -218,12 +220,21 @@
       body.message = 'Nhóm cộng tác đã đầy KOC (TikTok: "' + String(body.message || "").slice(0, 80) + '"). Cần tạo nhóm mới.';
     }
 
+    // Chỉ coi là Captcha khi có tín hiệu xác minh thực sự, TUYỆT ĐỐI không bắt nhầm trên mã nguồn HTML thông thường
+    const hasHtmlCaptchaChallenge = !parsedJson && (
+      rawLower.includes("/__secsdk/captcha") ||
+      rawLower.includes("captcha_verify_container") ||
+      rawLower.includes("captcha-verify-container") ||
+      rawLower.includes("id=\"captcha-verify-image\"") ||
+      rawLower.includes("data-testid=\"whirl-inner-img\"")
+    );
+
     const captchaSignals = !!verifyHeader
       || body.code === 30004009
-      || /captcha|verify|verification|risk|secsdk|challenge|robot|anti/i.test(msgLower)
-      || /captcha|verify|verification|risk|secsdk|challenge|robot|anti/.test(rawLower);
+      || (!isInvalidParams && response.status !== 404 && /captcha|verify[_-]?code|robot[_-]?check/i.test(msgLower))
+      || hasHtmlCaptchaChallenge;
 
-    const captchaRequired = !isInvalidParams && captchaSignals;
+    const captchaRequired = !isInvalidParams && response.status !== 404 && captchaSignals;
     if (captchaRequired) {
       console.log("[KOC VIP Captcha] Phát hiện Captcha:", { code: body.code, message: body.message });
     }

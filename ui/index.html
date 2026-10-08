@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Tạo lời mời KOC - Mời hàng loạt KOC VIP</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <div class="modal-window" id="inviteDialog">
     <!-- Header -->
@@ -16,7 +18,8 @@
       </div>
       <div class="heading-actions">
         <button class="icon-button" type="button" id="btnMaximize" title="Phóng to toàn màn hình">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="2" width="12" height="12" rx="2"></rect>
           </svg>
         </button>
@@ -33,6 +36,9 @@
       <button type="button" id="btnOpenKocPool" class="chip-btn">
         📋 Nhập KOC
       </button>
+      <button type="button" id="btnOpenHistory" class="chip-btn" title="Xem lịch sử các đợt mời trước đó & xuất file đối chiếu" style="font-weight: 600;">
+        📜 Lịch sử mời (<span id="historyCountBadge">0</span>)
+      </button>
       <div id="tabStatusBadge" class="status-badge checking">
         <span class="dot"></span>
         <span class="text">Đang dò tab TikTok...</span>
@@ -48,13 +54,26 @@
         <h3>1. Thông tin lời mời</h3>
         <div class="dialog-grid">
           <label>
-            <span>Tên lời mời</span>
-            <input type="text" id="inputTitle" maxlength="80" placeholder="VD: STONKAIKOC_SHOP_DATE_N1">
+            <span>Tên lời mời (Tối đa 26 ký tự)</span>
+            <input type="text" id="inputTitle" maxlength="26" placeholder="VD: CHAMVN x nhatminh">
           </label>
           <label>
             <span>Nhân viên mời</span>
             <input type="text" id="inputStaff" placeholder="Nhập tên NV (tự lưu)">
           </label>
+        </div>
+
+        <!-- Cấu hình Đánh số thứ tự & Xem trước tên nhóm TikTok -->
+        <div class="group-seq-box" style="margin-top: -4px; margin-bottom: 12px; padding: 8px 10px; background: #f1f5f9; border-radius: 8px; border: 1px solid #e2e8f0;">
+          <label class="checkbox-row" style="margin-bottom: 4px; font-size: 12px; font-weight: 600; color: #1e293b; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+            <input type="checkbox" id="chkGlobalSeq" checked>
+            <span>Đếm STT liên tục toàn bộ (Đánh dấu chuỗi mời tool)</span>
+          </label>
+          <div id="previewGroupName" style="font-size: 12px; color: #475569; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+            <span>👁️ Xem trước:</span>
+            <strong id="previewGroupNameVal" style="color: #0284c7; background: #e0f2fe; padding: 2px 6px; border-radius: 4px; font-family: monospace;">CHAMVN x nhatminh_001</strong>
+            <span id="previewSeqModeBadge" style="font-size: 11px; color: #64748b;">(Số tiếp: #001)</span>
+          </div>
         </div>
 
         <div class="dialog-grid">
@@ -111,7 +130,8 @@
         <!-- Lời nhắn -->
         <label class="field-label">
           <span>Nội dung lời mời</span>
-          <textarea id="inputMessage" rows="5" placeholder="Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!">Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!</textarea>
+          <textarea id="inputMessage" rows="5"
+            placeholder="Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!">Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!</textarea>
         </label>
 
         <!-- Chiến lược nâng cao -->
@@ -126,6 +146,21 @@
           </label>
           <input type="number" id="inputTestRunCount" value="5" min="1" max="50">
           <span>KOC</span>
+        </div>
+
+        <!-- Độ trễ an toàn chống quét -->
+        <div
+          style="margin-top: 10px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+          <label
+            style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: #334155;">
+            <span>🛡️ Độ trễ an toàn (Chống quét / Tránh Captcha):</span>
+            <select id="selectSafeDelay"
+              style="padding: 7px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 13px; font-weight: 500; background: #fff; color: #1e293b; cursor: pointer;">
+              <option value="7500" selected>🛡️ Chuẩn ~30s / Camp (7.5s - 9.0s) — Chống Captcha tuyệt đối</option>
+              <option value="4000">🐢 Vừa phải ~15s / Camp (4.0s - 5.5s) — Khá an toàn</option>
+              <option value="10000">🐌 Siêu chậm ~45s / Camp (10.0s - 13.0s) — Khi shop đang bị soi</option>
+            </select>
+          </label>
         </div>
       </section>
 
@@ -143,7 +178,8 @@
         </div>
 
         <div class="product-filter-bar">
-          <label class="select-all-box-label" id="lblSelectAllWrapper" title="Ấn lần 1 chọn full (tối đa 100 SP), ấn lần 2 bỏ full">
+          <label class="select-all-box-label" id="lblSelectAllWrapper"
+            title="Ấn lần 1 chọn full (tối đa 100 SP), ấn lần 2 bỏ full">
             <input type="checkbox" id="chkSelectAllProducts" class="square-chk">
             <span id="lblSelectAllText">Chọn full (0)</span>
           </label>
@@ -215,11 +251,14 @@
       <div class="actions-left">
         <button type="button" id="btnCancel" class="secondary-button ghost">Hủy</button>
         <button type="button" id="btnOpenKocPoolFooter" class="secondary-button">📋 Quản lý KOC</button>
+        <button type="button" id="btnOpenHistoryFooter" class="secondary-button" title="Xem lịch sử các lần mời trước đó & xuất file đối chiếu">📜 Lịch sử mời</button>
       </div>
       <div class="actions-right">
         <span id="statusQuickText" class="status-quick-text"></span>
         <button type="button" id="btnConflictCheck" class="secondary-button">Kiểm trùng</button>
-        <button type="button" id="btnDryRun" class="secondary-button" title="Tạo thử 1 nhóm với đúng 1 KOC ID số để cô lập lỗi trước khi chạy hàng loạt">🧪 Kiểm tra cấu hình (1 KOC)</button>
+        <button type="button" id="btnDryRun" class="secondary-button"
+          title="Tạo thử 1 nhóm với đúng 1 KOC ID số để cô lập lỗi trước khi chạy hàng loạt">🧪 Kiểm tra cấu hình (1
+          KOC)</button>
         <button type="button" id="btnSendReal" class="danger-button solid">Gửi thật</button>
       </div>
     </div>
@@ -234,15 +273,17 @@
         <p style="font-size: 12px; color: var(--text-muted);">
           Dán danh sách KOC (Excel, Sheets, CSV, @username, link TikTok, ID số):
         </p>
-        <textarea id="kocDrawerText" class="koc-textarea" placeholder="minhdz&#10;bepthongminh009&#10;@thuy_tieen22051999&#10;7495837291823719283"></textarea>
-        
+        <textarea id="kocDrawerText" class="koc-textarea"
+          placeholder="minhdz&#10;bepthongminh009&#10;@thuy_tieen22051999&#10;7495837291823719283"></textarea>
+
         <div class="koc-drawer-actions">
           <div style="display: flex; gap: 8px; align-items: center;">
             <label class="secondary-button-sm" style="cursor: pointer;">
               📁 Nạp file
               <input type="file" id="kocDrawerFileInput" accept=".xlsx, .xls, .csv, .txt" hidden>
             </label>
-            <button type="button" id="btnExportPastKocs" class="secondary-button-sm" title="Xuất toàn bộ KOC đã mời trong lịch sử ra Excel">
+            <button type="button" id="btnExportPastKocs" class="secondary-button-sm"
+              title="Xuất toàn bộ KOC đã mời trong lịch sử ra Excel">
               📊 Xuất KOC đã mời
             </button>
             <button type="button" id="btnDrawerClear" class="danger-button-sm">
@@ -260,21 +301,60 @@
       </div>
     </div>
 
+    <!-- History Overlay (Trang Lịch Sử Mời & Đối Chiếu File) -->
+    <div id="historyOverlay" class="modal-overlay-drawer history-overlay" hidden>
+      <div class="drawer-panel history-panel">
+        <div class="drawer-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <h3>📜 Lịch sử các lần mời KOC</h3>
+            <span class="history-count-badge" id="historyTotalBadge">0 đợt mời</span>
+          </div>
+          <button type="button" id="btnCloseHistory" class="icon-button" title="Đóng">×</button>
+        </div>
+
+        <div class="history-toolbar">
+          <input type="search" id="inputHistorySearch" placeholder="🔍 Tìm theo tên đợt, mã run..." class="history-search-input">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button type="button" id="btnHistoryRefresh" class="secondary-button-sm" title="Làm mới danh sách">🔄 Làm mới</button>
+            <button type="button" id="btnExportAllHistoryExcel" class="secondary-button-sm btn-excel-green" title="Xuất toàn bộ KOC trong lịch sử ra 1 file Excel tổng hợp">📊 Xuất tất cả lịch sử</button>
+          </div>
+        </div>
+
+        <div class="history-list-scroll" id="historyListContainer">
+          <div style="padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 13px;">
+            Đang tải lịch sử các đợt mời...
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Execution Panel (Tiến trình gửi lời mời) -->
     <div id="executionPanel" class="execution-panel" hidden>
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 10px;">
+          <button type="button" id="btnExecBack" class="secondary-button-sm" title="Quay lại thiết lập lời mời"
+            style="padding: 4px 10px; font-weight: 600; cursor: pointer;">← Quay lại</button>
           <h2 style="font-size: 16px; font-weight: 700;">🚀 Tiến trình gửi lời mời KOC VIP</h2>
           <span id="execStopwatchBadge" class="stopwatch-badge" title="Thời gian chạy thực tế">⏱️ 00:00:00</span>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
-          <button type="button" id="btnExportKocExcel" class="secondary-button-sm" title="Xuất danh sách KOC đợt này ra file Excel (.xlsx)" style="background: #ecfdf5; border-color: #a7f3d0; color: #047857; font-weight: 600;">📊 Xuất Excel</button>
-          <button type="button" id="btnCopyKocText" class="secondary-button-sm" title="Sao chép danh sách KOC dạng text" style="font-weight: 600;">📋 Copy KOC</button>
-          <button type="button" id="btnExportDebug" class="secondary-button-sm" title="Xuất toàn bộ Run và Chunks từ IndexedDB ra JSON">📁 Debug</button>
+          <button type="button" id="btnExportKocExcel" class="secondary-button-sm"
+            title="Xuất danh sách KOC đợt này ra file Excel (.xlsx)"
+            style="background: #ecfdf5; border-color: #a7f3d0; color: #047857; font-weight: 600;">📊 Xuất Excel</button>
+          <button type="button" id="btnCopyKocText" class="secondary-button-sm" title="Sao chép danh sách KOC dạng text"
+            style="font-weight: 600;">📋 Copy KOC</button>
+          <button type="button" id="btnExportDebug" class="secondary-button-sm"
+            title="Xuất toàn bộ Run và Chunks từ IndexedDB ra JSON">📁 Debug</button>
           <button type="button" id="btnExecPause" class="secondary-button-sm">Tạm dừng</button>
           <button type="button" id="btnExecResume" class="secondary-button-sm" hidden>Tiếp tục</button>
-          <button type="button" id="btnExecStop" class="danger-button solid" style="padding: 4px 12px; font-size: 12px;">Hủy bỏ</button>
-          <button type="button" id="btnExecClose" class="secondary-button-sm" hidden>Đóng bảng</button>
+          <button type="button" id="btnExecMinimize" class="secondary-button-sm"
+            title="Thu nhỏ bảng về thanh góc dưới để giải Captcha hoặc làm việc khác (phím tắt Esc)"
+            style="font-weight: 600; background: #fef3c7; border-color: #f59e0b; color: #b45309;">🧩 Thu nhỏ
+            (Esc)</button>
+          <button type="button" id="btnExecStop" class="danger-button solid"
+            style="padding: 4px 12px; font-size: 12px;">Hủy bỏ</button>
+          <button type="button" id="btnExecClose" class="secondary-button-sm" style="font-weight: 600;">✕ Đóng
+            bảng</button>
         </div>
       </div>
 
@@ -322,4 +402,5 @@
   <script src="xlsx.full.min.js"></script>
   <script src="app.js"></script>
 </body>
+
 </html>

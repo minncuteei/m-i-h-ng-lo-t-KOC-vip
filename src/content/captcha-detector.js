@@ -43,6 +43,23 @@
     if (banner) banner.remove();
   }
 
+  function playCaptchaAlertBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.35);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } catch {}
+  }
+
   // Quan sát DOM tìm khung captcha
   function checkCaptchaInDOM() {
     const selectors = [
@@ -51,11 +68,19 @@
       ".secsdk-captcha-drag-icon",
       "[data-testid='whirl-inner-img']",
       ".captcha_verify_container",
+      ".secsdk_captcha_modal",
+      ".captcha-disable-scroll",
+      "[class*='captcha-verify']",
+      "[id*='captcha-verify']",
+      "iframe[src*='captcha']",
+      "iframe[src*='verify']",
+      "[data-testid*='captcha']",
+      ".verify-bar-close",
     ];
     let found = false;
     for (const sel of selectors) {
       const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) {
+      if (el && el.offsetParent !== null && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0)) {
         found = true;
         break;
       }
@@ -64,6 +89,13 @@
     if (found && !isCaptchaActive) {
       isCaptchaActive = true;
       showBanner();
+      playCaptchaAlertBeep();
+      try {
+        chrome.runtime.sendMessage({
+          type: "KOCVIP_NOTIFY_CAPTCHA",
+          payload: { message: "TikTok đang yêu cầu giải Captcha trên màn hình. Hãy bấm vào đây để mở tab TikTok và giải ngay!" }
+        });
+      } catch {}
     } else if (!found && isCaptchaActive) {
       isCaptchaActive = false;
       hideBanner();
