@@ -271,6 +271,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  function sanitizeShopName(raw) {
+    let name = String(raw || "").trim();
+    name = name.replace(/Chính\s*thức/gi, "")
+               .replace(/CHÍNHChính/gi, "")
+               .replace(/Chính/gi, "")
+               .replace(/Official/gi, "")
+               .replace(/Mall/gi, "")
+               .replace(/Vietnam\s*\(([^)]+)\)/i, "$1")
+               .replace(/VN\s*\(([^)]+)\)/i, "$1")
+               .replace(/\s+/g, " ")
+               .trim();
+    if (!name || name.length < 2 || name.toLowerCase().includes("chạm chính") || name.toLowerCase() === "chạm") return "Sốp";
+    return name;
+  }
+
   // 2. Tìm kiếm tab TikTok đang mở
   if (type === "KOCVIP_GET_TIKTOK_TAB") {
     findTikTokTab()
@@ -287,14 +302,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         try {
           const domRes = await chrome.tabs.sendMessage(tab.id, { type: "KOCVIP_GET_DOM_SHOP_NAME" }).catch(() => null);
           if (domRes?.shopName) {
-            shopName = domRes.shopName;
+            shopName = sanitizeShopName(domRes.shopName);
             await chrome.storage.local.set({ kocvip_shop_name: shopName });
           }
         } catch {}
 
         if (!shopName) {
           const saved = await chrome.storage.local.get(["kocvip_shop_name"]);
-          shopName = saved?.kocvip_shop_name || "ChamVN";
+          shopName = sanitizeShopName(saved?.kocvip_shop_name || "Sốp");
         }
 
         sendResponse({ success: true, data: { id: tab.id, url: tab.url, title: tab.title, shopId, shopRegion, shopName } });

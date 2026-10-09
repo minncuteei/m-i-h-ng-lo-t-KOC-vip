@@ -183,6 +183,22 @@ export async function updateRun(payload = {}) {
   return updated;
 }
 
+export async function appendRunLog(serverRunId, logEntry) {
+  if (!serverRunId || !logEntry) return null;
+  const run = await getOne("runs", serverRunId);
+  if (!run) return null;
+  if (!Array.isArray(run.logs)) run.logs = [];
+  run.logs.push({
+    ...logEntry,
+    time: logEntry.time || new Date().toLocaleTimeString("vi-VN"),
+    ts: logEntry.ts || Date.now()
+  });
+  if (run.logs.length > 1000) run.logs.splice(0, run.logs.length - 800);
+  run.updatedAt = new Date().toISOString();
+  await putOne("runs", run);
+  return true;
+}
+
 export async function getRun(serverRunId) {
   return getOne("runs", serverRunId);
 }
@@ -420,6 +436,8 @@ export async function handleLocalInviteDbOperation(payload = {}) {
       return saveChunk(payload.manifest, payload.chunk, payload.patch);
     case "updateRun":
       return updateRun(payload);
+    case "appendRunLog":
+      return appendRunLog(payload.serverRunId, payload.logEntry);
     case "getRun":
       return getRun(payload.serverRunId);
     case "cancelRun":

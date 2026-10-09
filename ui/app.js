@@ -25,9 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const inputZalo = document.getElementById("inputZalo");
   const inputFacebook = document.getElementById("inputFacebook");
   const inputMessage = document.getElementById("inputMessage");
-  const chkResolveConflict = document.getElementById("chkResolveConflict");
-  const chkTestRun = document.getElementById("chkTestRun");
-  const inputTestRunCount = document.getElementById("inputTestRunCount");
+  const selectConflictResolve = document.getElementById("selectConflictResolve");
   const selectSafeDelay = document.getElementById("selectSafeDelay");
   const chkSampleEnabled = document.getElementById("chkSampleEnabled");
   const sampleModeBox = document.getElementById("sampleModeBox");
@@ -179,8 +177,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       const res = await chrome.runtime.sendMessage({ type: "KOCVIP_GET_TIKTOK_TAB" });
       if (res?.success && res.data) {
         activeTikTokTab = res.data;
-        const shopName = res.data.shopName || currentShopName || "ChamVN";
-        if (res.data.shopName && !currentShopName) currentShopName = res.data.shopName;
+        let rawName = res.data.shopName || currentShopName || "Sốp";
+        const shopName = sanitizeShopName(rawName);
+        if (shopName) currentShopName = shopName;
         const shopIdText = res.data.shopId ? ` (ID: ${res.data.shopId})` : "";
         tabStatusBadge.className = "status-badge connected";
         tabStatusBadge.innerHTML = `<span class="dot"></span><span class="text">TikTok Shop: <b>${escapeHtml(shopName)}</b>${shopIdText}</span>`;
@@ -209,6 +208,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   checkTikTokTab();
 
   let currentShopName = "";
+
+  function sanitizeShopName(raw) {
+    let name = String(raw || "").trim();
+    name = name.replace(/Chính\s*thức/gi, "")
+               .replace(/CHÍNHChính/gi, "")
+               .replace(/Chính/gi, "")
+               .replace(/Official/gi, "")
+               .replace(/Mall/gi, "")
+               .replace(/Vietnam\s*\(([^)]+)\)/i, "$1")
+               .replace(/VN\s*\(([^)]+)\)/i, "$1")
+               .replace(/\s+/g, " ")
+               .trim();
+    if (!name || name.length < 2 || name.toLowerCase().includes("chạm chính") || name.toLowerCase() === "chạm") return "Sốp";
+    return name;
+  }
 
   function updateTitleCharCounter() {
     if (!titleCharCount || !inputTitle) return;
@@ -252,11 +266,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function generateDefaultTitle(customShop) {
-    const shop = (customShop || currentShopName || "ChamVN").trim();
-    return `${shop} x nhatminh`;
+    const rawShop = customShop || currentShopName || "Sốp";
+    let shop = sanitizeShopName(rawShop);
+    // Rút gọn "Việt Nam" hoặc "Vietnam" thành "VN" để không bị tràn ký tự
+    shop = shop.replace(/Việt\s*Nam/gi, "VN").replace(/Vietnam/gi, "VN").replace(/\s+/g, " ").trim();
+    const suffix = " x nhatminh";
+    const maxShopLen = Math.max(4, 26 - suffix.length);
+    if (shop.length > maxShopLen) {
+      shop = shop.slice(0, maxShopLen).trim();
+    }
+    return `${shop}${suffix}`;
   }
 
-  // Cấu trúc đặt tên chuẩn: [Tên Shop / Tiêu đề]_[Số thứ tự] (VD: ChạmVN x nhatminh_001)
+  // Cấu trúc đặt tên chuẩn: [Tên Shop / Tiêu đề]_[Số thứ tự] (VD: Sốp x nhatminh_001)
   // TikTok giới hạn độ dài Tên lời mời tối đa chính xác 30 ký tự (0/30)
   function formatInvitationGroupName(basePrefix, seqNum) {
     const idxStr = String(seqNum).padStart(3, "0");
@@ -323,21 +345,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function updateGroupNamePreview() {
     updateTitleCharCounter();
-    if (!previewGroupNameVal) return;
-    const isGlobal = chkGlobalSeq ? chkGlobalSeq.checked : true;
-    const titleVal = (inputTitle ? inputTitle.value.trim() : "") || generateDefaultTitle();
-    const seqInfo = await getNextGroupSequence(titleVal, isGlobal);
-    const previewName = formatInvitationGroupName(seqInfo.prefix, seqInfo.startSeq);
-    previewGroupNameVal.textContent = previewName;
-    if (previewSeqModeBadge) {
-      if (seqInfo.isManual) {
-        previewSeqModeBadge.textContent = `(Tự gõ: #${String(seqInfo.startSeq).padStart(3, "0")})`;
-      } else if (isGlobal) {
-        previewSeqModeBadge.textContent = `(Toàn cục: #${String(seqInfo.startSeq).padStart(3, "0")})`;
-      } else {
-        previewSeqModeBadge.textContent = `(Theo tên: #${String(seqInfo.startSeq).padStart(3, "0")})`;
-      }
-    }
+    if (!previewTitle) return;
+    try {
+      const isGlobal = chkGlobalSeq ? chkGlobalSeq.checked : true;
+      const titleVal = (inputTitle ? inputTitle.value.trim() : "") || generateDefaultTitle();
+      const seqInfo = await getNextGroupSequence(titleVal, isGlobal);
+      const previewName = formatInvitationGroupName(seqInfo.prefix, seqInfo.startSeq);
+      previewTitle.textContent = previewName;
+    } catch {}
   }
 
   // Quản lý Hạn mức 24h Thông minh (Reset lúc 00:00 mỗi ngày)
@@ -431,9 +446,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       zalo: inputZalo.value || "0943102588",
       facebook: inputFacebook.value,
       message: inputMessage.value,
-      resolveConflict: chkResolveConflict.checked,
-      testRun: chkTestRun.checked,
-      testRunCount: inputTestRunCount.value,
+      conflictResolve: selectConflictResolve ? selectConflictResolve.value : "skip",
       safeDelay: selectSafeDelay ? selectSafeDelay.value : "7500",
       sampleEnabled: chkSampleEnabled ? chkSampleEnabled.checked : true,
       sampleApprovalMode: document.querySelector('input[name="sampleApprovalMode"]:checked')?.value || "manual",
@@ -449,8 +462,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   chrome.storage.local.get(["kocvip_saved_settings"], (data) => {
     const s = data.kocvip_saved_settings;
     if (s) {
-      if (s.title && !s.title.startsWith("STONKAIKOC_VIP")) {
-        inputTitle.value = s.title;
+      if (s.title && s.title.trim()) {
+        inputTitle.value = s.title.trim();
       } else {
         inputTitle.value = generateDefaultTitle();
       }
@@ -505,9 +518,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         inputMessage.value = DEFAULT_INVITE_MESSAGE;
       }
 
-      if (s.resolveConflict !== undefined) chkResolveConflict.checked = !!s.resolveConflict;
-      if (s.testRun !== undefined) chkTestRun.checked = !!s.testRun;
-      if (s.testRunCount) inputTestRunCount.value = s.testRunCount;
+      if (selectConflictResolve) {
+        selectConflictResolve.value = s.conflictResolve || "skip";
+      }
       if (s.safeDelay && selectSafeDelay) selectSafeDelay.value = s.safeDelay;
 
       if (chkSampleEnabled && s.sampleEnabled !== undefined) {
@@ -534,6 +547,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       inputZalo.value = "0943102588";
       inputMessage.value = DEFAULT_INVITE_MESSAGE;
       setQuickExpiryDays(7); // Mặc định 1 tuần theo yêu cầu
+      if (selectConflictResolve) selectConflictResolve.value = "skip";
       saveSettings();
     }
     getDailyQuota().then(updateDailyLimitBadge);
@@ -542,7 +556,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Bắt sự kiện thay đổi trên toàn bộ các input / select / checkbox để tự động lưu
-  [inputTitle, inputExpiresAt, selectContentType, inputCommission, inputAdsCommission, inputZalo, inputFacebook, inputMessage, inputTestRunCount].forEach(el => {
+  [inputTitle, inputExpiresAt, selectContentType, inputCommission, inputAdsCommission, inputZalo, inputFacebook, inputMessage].forEach(el => {
     if (el) {
       el.addEventListener("input", saveSettings);
       el.addEventListener("change", saveSettings);
@@ -561,9 +575,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  if (selectConflictResolve) selectConflictResolve.addEventListener("change", saveSettings);
   if (selectSafeDelay) selectSafeDelay.addEventListener("change", saveSettings);
 
-  [chkShareAfter, chkResolveConflict, chkTestRun].forEach(el => {
+  [chkShareAfter].forEach(el => {
     if (el) el.addEventListener("change", saveSettings);
   });
 
@@ -612,8 +627,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       // Nhận diện và cập nhật tên shop
       if (res.data?.shopName) {
-        currentShopName = res.data.shopName;
-        if (!inputTitle.value || inputTitle.value.startsWith("STONKAIKOC_VIP") || inputTitle.value.includes("x nhatminh")) {
+        currentShopName = sanitizeShopName(res.data.shopName);
+        // Chỉ điền tên mặc định nếu ô Tên lời mời đang hoàn toàn trống
+        if (!inputTitle.value || !inputTitle.value.trim()) {
           inputTitle.value = generateDefaultTitle(currentShopName);
           saveSettings();
         }
@@ -1266,7 +1282,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 target_ads_commission: Math.round(Number(inputAdsCommission.value || 2) * 100),
               })),
               recipients: targetChunk,
-              tuXuLyTrung: chkResolveConflict.checked,
+              tuXuLyTrung: selectConflictResolve ? selectConflictResolve.value === "resolve" : false,
             },
           },
         },
@@ -1381,7 +1397,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         zalo: inputZalo.value.trim(),
         facebook: inputFacebook.value.trim(),
         message: inputMessage.value.trim(),
-        tuXuLyTrung: chkResolveConflict.checked,
+        tuXuLyTrung: selectConflictResolve ? selectConflictResolve.value === "resolve" : false,
         sampleEnabled: chkSampleEnabled ? chkSampleEnabled.checked : true,
         sampleApprovalMode: document.querySelector('input[name="sampleApprovalMode"]:checked')?.value || "manual",
         products: selectedProducts.map(p => ({
@@ -1450,13 +1466,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       }).catch(() => { });
     }
 
-    const testRun = chkTestRun.checked;
-    const testCount = Math.max(1, Number(inputTestRunCount.value || 5));
-    const targetRecipients = testRun ? kocList.slice(0, testCount) : kocList;
+    const targetRecipients = kocList;
 
     const baseTitle = (inputTitle.value.trim() || generateDefaultTitle()).replace(/_N\d+$/i, "");
     const campaignTitle = `${baseTitle}_N1`;
-    const confirmMsg = `XÁC NHẬN GỬI THẬT:\n\n• Số KOC mời: ${targetRecipients.length} KOC ${testRun ? '(Chế độ chạy thử)' : ''}\n• Số sản phẩm gắn: ${selectedProducts.length} SP\n• Hoa hồng: Thường ${inputCommission.value}%, Ads ${inputAdsCommission.value}%\n• Tên đợt: ${baseTitle}\n• Thời hạn: ${inputExpiresAt.value || '1 tuần'}\n\nBắt đầu ngay?`;
+    const confirmMsg = `XÁC NHẬN GỬI THẬT:\n\n• Số KOC mời: ${targetRecipients.length} KOC\n• Số sản phẩm gắn: ${selectedProducts.length} SP\n• Hoa hồng: Thường ${inputCommission.value}%, Ads ${inputAdsCommission.value}%\n• Tên đợt: ${baseTitle}\n• Thời hạn: ${inputExpiresAt.value || '1 tuần'}\n• Xử lý KOC trùng: ${selectConflictResolve?.value === 'resolve' ? 'Chuyển về lời mời này' : 'Xóa khỏi lời mời này (Bỏ qua)'}\n\nBắt đầu ngay?`;
     if (!confirm(confirmMsg)) return;
 
     btnSendReal.disabled = true;
@@ -1571,7 +1585,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           zalo: inputZalo.value.trim(),
           facebook: inputFacebook.value.trim(),
           message: inputMessage.value.trim(),
-          tuXuLyTrung: chkResolveConflict.checked,
+          tuXuLyTrung: selectConflictResolve ? selectConflictResolve.value === "resolve" : false,
           sampleEnabled: chkSampleEnabled ? chkSampleEnabled.checked : true,
           sampleApprovalMode: document.querySelector('input[name="sampleApprovalMode"]:checked')?.value || "manual",
           products: selectedProducts.map(p => ({
@@ -2333,6 +2347,53 @@ document.addEventListener("DOMContentLoaded", async () => {
             }).join("");
           } else {
             execTopReasonsBox.hidden = true;
+          }
+        }
+
+        // Khôi phục và hiển thị đầy đủ nhật ký Log của đợt mời lên màn hình
+        if (execLogContent) {
+          execLogContent.innerHTML = "";
+          const runLogs = Array.isArray(run?.logs) ? run.logs : [];
+          if (runLogs.length > 0) {
+            // Hiển thị nhật ký thực tế đã lưu của đợt mời
+            [...runLogs].reverse().forEach(entry => {
+              const t = entry.time || (entry.ts ? new Date(entry.ts).toLocaleTimeString("vi-VN") : "??:??:??");
+              const div = document.createElement("div");
+              div.className = `log-line ${entry.isError ? "error" : ""}`;
+              const textContent = (entry.isError && !entry.text.startsWith("[LỖI]")) ? `[LỖI] ${entry.text}` : entry.text;
+              div.textContent = `[${t}] ${textContent}`;
+              execLogContent.prepend(div);
+            });
+          } else if (chunks.length > 0) {
+            // Tự động tổng hợp chi tiết từ danh sách KOC cho các đợt mời cũ
+            const lines = [];
+            const startT = run?.createdAt ? new Date(run.createdAt).toLocaleTimeString("vi-VN") : "--:--:--";
+            lines.push({ text: `[Khởi tạo] Đợt mời: ${run?.draft?.title || run?.serverRunId || "KOC VIP"} (Tổng ${total} KOC)`, time: startT, isError: false });
+            for (const c of chunks) {
+              for (const r of (c.recipients || [])) {
+                const kocName = r.handle ? `@${r.handle}` : (r.nickName || r.creatorOecId || "KOC");
+                if (r.status === "sent") {
+                  lines.push({ text: `[THÀNH CÔNG] KOC ${kocName}: Đã gửi lời mời thành công`, time: startT, isError: false });
+                } else if (r.status === "skipped") {
+                  lines.push({ text: `[BỎ QUA] KOC ${kocName}: ${r.reason || "Bị trùng / Bỏ qua"}`, time: startT, isError: false });
+                } else if (r.status === "failed") {
+                  lines.push({ text: `[LỖI] KOC ${kocName}: ${r.reason || "Thất bại"}`, time: startT, isError: true });
+                } else if (r.status === "waiting_daily_reset") {
+                  lines.push({ text: `[CHỜ 0H] KOC ${kocName}: Chờ reset hạn mức ngày`, time: startT, isError: false });
+                }
+              }
+            }
+            const endT = run?.finishedAt ? new Date(run.finishedAt).toLocaleTimeString("vi-VN") : startT;
+            lines.push({ text: `[Kết thúc] Hoàn tất đợt mời: ${sent} thành công, ${skipped} bỏ qua, ${failed} lỗi.`, time: endT, isError: failed > 0 });
+
+            lines.reverse().forEach(entry => {
+              const div = document.createElement("div");
+              div.className = `log-line ${entry.isError ? "error" : ""}`;
+              div.textContent = `[${entry.time}] ${entry.text}`;
+              execLogContent.prepend(div);
+            });
+          } else {
+            execLogContent.innerHTML = `<div class="log-line">[Hệ thống] Không có dữ liệu nhật ký log cho đợt mời này.</div>`;
           }
         }
       }

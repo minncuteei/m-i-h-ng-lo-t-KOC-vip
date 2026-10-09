@@ -7,6 +7,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let activeTikTokTab = null;
 
+  function sanitizeShopName(raw) {
+    let name = String(raw || "").trim();
+    name = name.replace(/Chính\s*thức/gi, "")
+               .replace(/CHÍNHChính/gi, "")
+               .replace(/Chính/gi, "")
+               .replace(/Official/gi, "")
+               .replace(/Mall/gi, "")
+               .replace(/Vietnam\s*\(([^)]+)\)/i, "$1")
+               .replace(/VN\s*\(([^)]+)\)/i, "$1")
+               .replace(/\s+/g, " ")
+               .trim();
+    if (!name || name.length < 2 || name.toLowerCase().includes("chạm chính") || name.toLowerCase() === "chạm") return "Sốp";
+    return name;
+  }
+
   async function checkTikTokTab() {
     try {
       const tabs = await chrome.tabs.query({
@@ -30,7 +45,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           const urlObj = new URL(activeTikTokTab.url);
           shopId = urlObj.searchParams.get("shop_id") || urlObj.searchParams.get("oec_seller_id") || "";
           const saved = await chrome.storage.local.get(["kocvip_shop_name"]);
-          shopName = saved?.kocvip_shop_name || "";
+          shopName = sanitizeShopName(saved?.kocvip_shop_name || "");
         } catch {}
 
         if (shopName) {

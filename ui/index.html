@@ -55,7 +55,7 @@
         <label style="margin-bottom: 8px;">
           <span>Tên lời mời</span>
           <div class="input-with-counter">
-            <input type="text" id="inputTitle" maxlength="30" placeholder="VD: ChamVN x nhatminh">
+            <input type="text" id="inputTitle" maxlength="30" placeholder="VD: Sốp x nhatminh">
             <span id="titleCharCount" class="input-char-counter">0/30</span>
           </div>
         </label>
@@ -126,18 +126,17 @@
             placeholder="Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!">Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!</textarea>
         </label>
 
-        <!-- Chiến lược nâng cao -->
-        <label class="checkbox-row">
-          <input type="checkbox" id="chkResolveConflict" checked>
-          <span>Kéo KOC trùng về lượt mời này (tự gỡ khỏi đợt cũ)</span>
-        </label>
-        <div class="checkbox-row highlight">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-            <input type="checkbox" id="chkTestRun">
-            <span><b>Chạy thử:</b> Chỉ mời</span>
+        <!-- Giải quyết KOC bị trùng lời mời -->
+        <div style="margin-top: 10px; margin-bottom: 8px;">
+          <label
+            style="display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: #334155;">
+            <span>🔄 Giải quyết KOC bị trùng lời mời:</span>
+            <select id="selectConflictResolve"
+              style="padding: 7px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12.5px; font-weight: 500; background: #fff; color: #1e293b; cursor: pointer;">
+              <option value="skip" selected>🛡️ Xóa nhà sáng tạo khỏi lời mời này (Bỏ qua KOC trùng)</option>
+              <option value="resolve">⚡ Chuyển nhà sáng tạo đến lời mời này (Gỡ khỏi camp cũ)</option>
+            </select>
           </label>
-          <input type="number" id="inputTestRunCount" value="5" min="1" max="50">
-          <span>KOC</span>
         </div>
 
         <!-- Độ trễ an toàn chống quét -->
@@ -227,7 +226,7 @@
         <section class="invite-card preview-card-extended">
           <h3>4. Xem trước lời mời</h3>
           <div class="invite-preview">
-            <strong id="previewTitle">Hannah Seyo x nhatminh</strong>
+            <strong id="previewTitle">Sốp x nhatminh</strong>
             <p id="previewMessage">Nội dung lời mời sẽ hiển thị tại đây...</p>
             <div class="preview-products-box">
               <span id="previewProductsCount">Chưa chọn sản phẩm</span>
