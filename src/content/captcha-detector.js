@@ -1,21 +1,160 @@
 /**
- * KOC VIP - Captcha Monitor & Auto/Manual Hybrid Resolver Helper.
- * 1. Tự động phát hiện Captcha TikTok.
- * 2. Tự động kết nối Router Server (127.0.0.1:8000) để giải bằng OpenCV / NopeCHA và tự kéo chuột.
- * 3. Nếu server chưa bật hoặc giải lỗi: Tự động fallback sang bảng hướng dẫn giải tay an toàn.
+ * KOC VIP - Centralized CAPTCHA State Manager & Single-Actor Resolver.
+ * 
+ * KIẾN TRÚC ĐIỀU PHỐI ĐƠN NHẤT (SINGLE-ACTOR MUTEX & STATE MANAGER):
+ * 1. Single Actor Mutex: Tuyệt đối chỉ 1 tác nhân giải tại 1 thời điểm.
+ * 2. Nút Dừng Khẩn Cấp (Emergency Stop Button): Cho phép người dùng bấm "⏹️ Dừng Tự Giải / Chuyển Giải Tay" ngay lập tức, ngắt kết nối gửi về Server (AbortController) và dừng mọi hành vi kéo chuột.
+ * 3. Chế độ Tắt Tự Động: Người dùng có thể chủ động chuyển hẳn sang chế độ giải tay bất kỳ lúc nào.
+ * 4. Phân tách rõ ràng 5 Trạng Thái (IDLE -> DETECTED -> ANALYZING -> INTERACTING -> PENDING_VERIFICATION -> MANUAL_REQUIRED -> RESOLVED).
+ * 5. Chống lặp vô tận (Session Tracking qua captcha_session_id, Cooldown 4s).
  */
 (function () {
   if (window.top !== window) return;
 
-  const ROUTER_API = "http://127.0.0.1:8000/captcha/solve";
+  // ================= 1. TAB-LEVEL SINGLETON COORDINATOR =================
+  const COORDINATOR_ID = "kocvip_coord_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+  window.__KOCVIP_CAPTCHA_COORDINATOR__ = COORDINATOR_ID;
+  document.documentElement.setAttribute("data-kocvip-captcha-coordinator", COORDINATOR_ID);
+
+  function isCoordinatorActive() {
+    return window.__KOCVIP_CAPTCHA_COORDINATOR__ === COORDINATOR_ID &&
+           document.documentElement.getAttribute("data-kocvip-captcha-coordinator") === COORDINATOR_ID;
+  }
+
   const UNIFIED_API = "http://127.0.0.1:8000/captcha/solve";
   const FEEDBACK_API = "http://127.0.0.1:8000/captcha/feedback";
-  const BANNER_ID = "kocvip-captcha-manual-banner";
-  let isCaptchaActive = false;
-  let isAutoSolving = false;
-  let autoSolveAttempts = 0;
-  let lastSolvedInfo = null; // { phash, sample_type, solution, extra_data }
+  const BANNER_ID = "kocvip-captcha-state-banner";
 
+  // ================= 2. CAPTCHA STATE MANAGER CORE =================
+  const CAPTCHA_STATES = {
+    IDLE: "IDLE",
+    DETECTED: "DETECTED",
+    ANALYZING: "ANALYZING",
+    INTERACTING: "INTERACTING",
+    PENDING_VERIFICATION: "PENDING_VERIFICATION",
+    MANUAL_REQUIRED: "MANUAL_REQUIRED",
+    RESOLVED: "RESOLVED",
+    FAILED: "FAILED"
+  };
+
+  class CaptchaStateManager {
+    constructor() {
+      this.currentState = CAPTCHA_STATES.IDLE;
+      this.currentSession = null;
+      this.maxAutoAttempts = 2;
+      this.minCooldownMs = 4000;
+      this.lastAttemptTime = 0;
+      this.autoSolveDisabled = sessionStorage.getItem("kocvip_captcha_manual_only") === "1";
+    }
+
+    createSession(type = "slider") {
+      // Hủy session cũ nếu còn controller
+      if (this.currentSession && this.currentSession.abortController) {
+        try { this.currentSession.abortController.abort(); } catch {}
+      }
+
+      this.currentSession = {
+        sessionId: "sess_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6),
+        captchaType: type,
+        detectedAt: Date.now(),
+        attempts: 0,
+        stateHistory: [],
+        aiResult: null,
+        interactionResult: null,
+        platformStatus: null,
+        phash: null,
+        solution: null,
+        abortController: new AbortController(),
+        isCancelled: false
+      };
+      return this.currentSession;
+    }
+
+    stopAndSwitchToManual(reason = "user_cancelled") {
+      console.warn(`[CAPTCHA Manager] 🛑 Người dùng kích hoạt DỪNG TỰ ĐỘNG GIẢI (${reason}). Ngắt kết nối Server và chuyển sang giải tay!`);
+      if (this.currentSession) {
+        this.currentSession.isCancelled = true;
+        if (this.currentSession.abortController) {
+          try { this.currentSession.abortController.abort(); } catch {}
+        }
+      }
+      this.autoSolveDisabled = true;
+      sessionStorage.setItem("kocvip_captcha_manual_only", "1");
+      this.transitionTo(CAPTCHA_STATES.MANUAL_REQUIRED, { reason });
+    }
+
+    enableAutoSolve() {
+      console.log("[CAPTCHA Manager] ▶️ Kích hoạt lại chế độ AI Tự Giải.");
+      this.autoSolveDisabled = false;
+      sessionStorage.removeItem("kocvip_captcha_manual_only");
+      if (this.currentState === CAPTCHA_STATES.MANUAL_REQUIRED) {
+        this.transitionTo(CAPTCHA_STATES.DETECTED, { reason: "user_reenabled_ai" });
+      }
+    }
+
+    transitionTo(newState, meta = {}) {
+      const prev = this.currentState;
+      this.currentState = newState;
+      const record = {
+        from: prev,
+        to: newState,
+        time: Date.now(),
+        meta
+      };
+
+      if (this.currentSession) {
+        this.currentSession.stateHistory.push(record);
+      }
+
+      console.log(`[CAPTCHA State Manager] 🔄 [${prev}] ➔ [${newState}]`, meta);
+
+      // Cập nhật DOM & biến toàn cục để các Module khác (Crawler, Inviter) lắng nghe
+      document.documentElement.setAttribute("data-kocvip-captcha-state", newState);
+      window.__KOCVIP_CAPTCHA_STATE__ = newState;
+      window.__STONK_CAPTCHA_ACTIVE_UNTIL__ = (newState !== CAPTCHA_STATES.IDLE && newState !== CAPTCHA_STATES.RESOLVED) 
+        ? (Date.now() + 60000) 
+        : 0;
+
+      // Phát sự kiện toàn Tab
+      try {
+        window.dispatchEvent(new CustomEvent("KOCVIP_CAPTCHA_STATE_CHANGE", {
+          detail: { state: newState, session: this.currentSession, meta }
+        }));
+      } catch {}
+
+      this.updateUI();
+    }
+
+    updateUI() {
+      switch (this.currentState) {
+        case CAPTCHA_STATES.DETECTED:
+          showBanner("Phát hiện Captcha trên trang. Đang tạm dừng tác vụ và chuẩn bị xử lý...", true);
+          break;
+        case CAPTCHA_STATES.ANALYZING:
+          showBanner("AI Hub đang phân tích cấu trúc hình ảnh...", true);
+          break;
+        case CAPTCHA_STATES.INTERACTING:
+          showBanner("Đang thực hiện mô phỏng tương tác sinh trắc học...", true);
+          break;
+        case CAPTCHA_STATES.PENDING_VERIFICATION:
+          showBanner("Đang đợi TikTok xác nhận kết quả (vui lòng chờ vài giây)...", true);
+          break;
+        case CAPTCHA_STATES.MANUAL_REQUIRED:
+          showBanner("Chế độ giải an toàn: Vui lòng <b>kéo thanh trượt trên màn hình</b> để xác minh thủ công. Tiện ích sẽ <b>tự động tiếp tục</b> ngay khi hoàn tất.", false);
+          break;
+        case CAPTCHA_STATES.RESOLVED:
+          hideBanner();
+          break;
+        case CAPTCHA_STATES.IDLE:
+          hideBanner();
+          break;
+      }
+    }
+  }
+
+  const stateManager = new CaptchaStateManager();
+
+  // ================= 3. DOM SELECTORS =================
   const SELECTORS = {
     PUZZLE_BG: "#captcha-verify-image, .captcha-verify-container #captcha-verify-image",
     PUZZLE_PIECE: "img.captcha_verify_img_slide, .captcha-verify-container .cap-absolute img",
@@ -23,6 +162,8 @@
     ROTATE_INNER: "[data-testid=whirl-inner-img], .captcha-verify-container > div > div > div > img.cap-absolute",
     ROTATE_OUTER: "[data-testid=whirl-outer-img], .captcha-verify-container > div > div > div > img:first-child",
     ROTATE_SLIDE_BAR: ".captcha_verify_slide--slidebar, .captcha-verify-container > div > div > div.cap-w-full > div.cap-rounded-full",
+    REFRESH_BTN: ".secsdk_captcha_refresh--icon, .captcha_verify_action--refresh, [aria-label='Refresh'], .captcha-refresh",
+    ERROR_MESSAGE: ".captcha_verify_message--error, .captcha-error-tip, .secsdk-captcha-error",
     CONTAINER: ".captcha-verify-container, .captcha-disable-scroll",
     MODAL_DETECTORS: [
       ".captcha-verify-container",
@@ -38,6 +179,7 @@
     ]
   };
 
+  let lastBannerNotifyTime = 0;
   function showBanner(message, isAuto = false) {
     let banner = document.getElementById(BANNER_ID);
     if (!banner) {
@@ -45,30 +187,75 @@
       banner.id = BANNER_ID;
       document.body.appendChild(banner);
     }
+    
     banner.innerHTML = `
-      <div style="position:fixed;bottom:20px;right:20px;z-index:999999;background:#1E293B;color:#F8FAFC;border:2px solid ${isAuto ? '#3B82F6' : '#F59E0B'};border-radius:10px;padding:14px 18px;box-shadow:0 10px 25px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:360px;animation:kocvip-fade-in 0.3s ease;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-          <span style="font-size:20px">${isAuto ? '🤖' : '⚠️'}</span>
-          <strong style="${isAuto ? 'color:#38BDF8' : 'color:#F59E0B'};font-size:14px">
-            ${isAuto ? 'KOC VIP Đang Tự Giải Captcha' : 'TikTok Yêu Cầu Xác Minh'}
-          </strong>
+      <div style="position:fixed;bottom:20px;right:20px;z-index:999999;background:#1E293B;color:#F8FAFC;border:2px solid ${isAuto ? '#3B82F6' : '#F59E0B'};border-radius:12px;padding:14px 18px;box-shadow:0 12px 30px rgba(0,0,0,0.6);font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:380px;animation:kocvip-fade-in 0.3s ease;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:18px">${isAuto ? '🤖' : '🖐️'}</span>
+            <strong style="${isAuto ? 'color:#38BDF8' : 'color:#F59E0B'};font-size:13.5px">
+              ${isAuto ? 'AI Hub Đang Tự Giải Captcha' : 'Chế Độ Xác Minh Thủ Công'}
+            </strong>
+          </div>
+          <button id="kocvip-btn-focus-captcha" style="background:#334155;color:#94A3B8;border:none;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;" title="Cuộn tới Captcha">
+            🎯 Định vị
+          </button>
         </div>
-        <p style="font-size:12.5px;line-height:1.5;margin:0 0 10px 0;color:#CBD5E1">
+        
+        <p style="font-size:12px;line-height:1.5;margin:0 0 10px 0;color:#CBD5E1">
           ${message}
         </p>
-        <div style="font-size:11px;color:#94A3B8;border-top:1px dashed #334155;padding-top:6px;display:flex;justify-content:space-between;">
-          <span>${isAuto ? 'Đang gọi AI Router (OpenCV/NopeCHA)...' : 'KOC VIP • Chế độ giải tay'}</span>
-          <span style="color:#64748B;">Esc để ẩn</span>
+        
+        <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px dashed #334155;padding-top:8px;margin-top:4px;">
+          ${isAuto ? `
+            <button id="kocvip-btn-emergency-stop" style="background:#DC2626;color:#FFFFFF;border:none;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;">
+              ⏹️ Dừng AI (Giải tay)
+            </button>
+          ` : `
+            <button id="kocvip-btn-reenable-ai" style="background:#0284C7;color:#FFFFFF;border:none;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;">
+              ▶️ Thử bật lại AI
+            </button>
+          `}
+          <span style="font-size:11px;color:#64748B;">Esc để ẩn</span>
         </div>
       </div>
     `;
 
-    try {
-      chrome.runtime.sendMessage({
-        type: "KOCVIP_PROGRESS_UPDATE",
-        payload: { status: "waiting_captcha", message: "TikTok yêu cầu giải Captcha." },
-      });
-    } catch {}
+    // Gán sự kiện cho các nút điều khiển trên Banner
+    const stopBtn = banner.querySelector("#kocvip-btn-emergency-stop");
+    if (stopBtn) {
+      stopBtn.onclick = (e) => {
+        e.stopPropagation();
+        stateManager.stopAndSwitchToManual("user_clicked_stop_button");
+      };
+    }
+
+    const reenableBtn = banner.querySelector("#kocvip-btn-reenable-ai");
+    if (reenableBtn) {
+      reenableBtn.onclick = (e) => {
+        e.stopPropagation();
+        stateManager.enableAutoSolve();
+      };
+    }
+
+    const focusBtn = banner.querySelector("#kocvip-btn-focus-captcha");
+    if (focusBtn) {
+      focusBtn.onclick = (e) => {
+        e.stopPropagation();
+        focusAndHighlightCaptcha();
+      };
+    }
+
+    const now = Date.now();
+    if (now - lastBannerNotifyTime > 15000) {
+      lastBannerNotifyTime = now;
+      try {
+        chrome.runtime.sendMessage({
+          type: "KOCVIP_PROGRESS_UPDATE",
+          payload: { status: "waiting_captcha", message: "TikTok yêu cầu giải Captcha." },
+        });
+      } catch {}
+    }
   }
 
   function hideBanner() {
@@ -114,150 +301,217 @@
     });
   }
 
-  function cubicBezier(p0, p1, p2, p3, t) {
-    const u = 1 - t;
-    return (u*u*u)*p0 + 3*(u*u)*t*p1 + 3*u*(t*t)*p2 + (t*t*t)*p3;
-  }
-
   function dispatchMouseSeq(el, type, x, y) {
-    const init = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, pageX: x, pageY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true };
-    if (type.startsWith('pointer')) el.dispatchEvent(new PointerEvent(type, init));
-    else if (type.startsWith('drag')) el.dispatchEvent(new DragEvent(type, init));
-    else el.dispatchEvent(new MouseEvent(type, init));
+    const isDownOrMove = type.includes('down') || type.includes('move') || type.includes('drag');
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      pageX: x,
+      pageY: y,
+      screenX: x + (window.screenX || 0),
+      screenY: y + (window.screenY || 0),
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+      buttons: isDownOrMove ? 1 : 0,
+      button: type.includes('contextmenu') ? 2 : 0,
+      which: isDownOrMove ? 1 : 0
+    };
+
+    if (type.startsWith('pointer')) {
+      el.dispatchEvent(new PointerEvent(type, init));
+      if (document && el !== document) document.dispatchEvent(new PointerEvent(type, init));
+      if (window && el !== window) window.dispatchEvent(new PointerEvent(type, init));
+    } else if (type.startsWith('drag')) {
+      el.dispatchEvent(new DragEvent(type, init));
+    } else {
+      el.dispatchEvent(new MouseEvent(type, init));
+      if (document && el !== document) document.dispatchEvent(new MouseEvent(type, init));
+      if (window && el !== window) window.dispatchEvent(new MouseEvent(type, init));
+    }
   }
 
-  // Hàm mô phỏng kéo trượt Puzzle SIÊU MƯỢT, KHÔNG RUNG LẮC (Chuẩn TikTok Anti-Detection)
-  async function simulateBiometricDrag(btn, targetDistance) {
+  // ================= 4. MÔ PHỎNG CHUỘT SINH TRẮC HỌC (1.8s - 2.5s) KÈM CƠ CHẾ CANCEL =================
+  async function simulateBiometricDrag(btn, targetDistance, session) {
     const rect = btn.getBoundingClientRect();
     const startX = rect.x + rect.width / 2;
     const startY = rect.y + rect.height / 2;
-    const endX = startX + targetDistance;
+    const finalEndX = startX + targetDistance;
 
-    // 1. Tiếp cận nhẹ nhàng vào thanh trượt (Approach)
-    const approachSteps = 8;
+    if (session && session.isCancelled) return;
+
+    // 1. Độ trễ nhận thức (600 - 900ms)
+    await new Promise(r => setTimeout(r, 600 + Math.random() * 300));
+    if (session && session.isCancelled) return;
+
+    // 2. Tiếp cận con trỏ (Approach: 10 bước ~180ms)
+    const approachSteps = 10;
     for (let i = 1; i <= approachSteps; i++) {
+      if (session && session.isCancelled) return;
       const t = i / approachSteps;
       const ease = t * t * (3 - 2 * t);
-      const curX = (startX - 35) + (35 * ease);
-      const curY = (startY + 10) - (10 * ease);
+      const curX = (startX - 45) + (45 * ease);
+      const curY = (startY + 15) - (15 * ease);
       dispatchMouseSeq(document, 'mousemove', curX, curY);
-      await new Promise(r => setTimeout(r, 15 + Math.random() * 10));
+      await new Promise(r => setTimeout(r, 16 + Math.random() * 6));
     }
 
-    // Rê chuột vào tâm nút kéo, nghỉ ngắn
     dispatchMouseSeq(btn, 'mousemove', startX, startY);
-    await new Promise(r => setTimeout(r, 120 + Math.random() * 50));
+    await new Promise(r => setTimeout(r, 180 + Math.random() * 70));
+    if (session && session.isCancelled) return;
 
-    // 2. Nhấn chuột (Mousedown & Dragstart)
+    // 3. Nhấn chuột
     dispatchMouseSeq(btn, 'pointerdown', startX, startY);
     dispatchMouseSeq(btn, 'mousedown', startX, startY);
     dispatchMouseSeq(btn, 'dragstart', startX, startY);
-    await new Promise(r => setTimeout(r, 100 + Math.random() * 50));
+    await new Promise(r => setTimeout(r, 200 + Math.random() * 80));
 
-    // 3. Kéo mượt mà theo đường cong Sine (32 bước, giảm rung trục Y xuống mức siêu nhẹ ±0.2px)
-    const steps = 32 + Math.floor(Math.random() * 6);
-    let lastX = startX;
+    // 4. Kéo đoạn chính theo S-Curve kèm Micro-Jitter (65 - 80 bước)
+    const willOvershoot = Math.random() < 0.70;
+    const overshootDist = willOvershoot ? (2.5 + Math.random() * 3.0) : 0;
+    const stage1EndX = finalEndX + overshootDist;
 
+    const steps = 65 + Math.floor(Math.random() * 15);
     for (let i = 1; i <= steps; i++) {
+      if (session && session.isCancelled) {
+        // Nhả chuột khẩn cấp nếu bị huỷ
+        dispatchMouseSeq(btn, 'mouseup', startX, startY);
+        return;
+      }
       const progress = i / steps;
-      // Hàm Sine Easing giúp kéo nhanh đoạn đầu và chậm dần khi gần tới đích
-      const eased = Math.sin((progress * Math.PI) / 2);
-      const currX = startX + (targetDistance * eased);
-      // Rung tay cực kỳ nhẹ và tự nhiên (chỉ ±0.2px, không làm giật hay trượt ra ngoài)
-      const microJitterY = startY + (Math.sin(progress * Math.PI * 2) * 0.3) + (Math.random() * 0.4 - 0.2);
+      const eased = progress < 0.5 
+        ? 2 * progress * progress 
+        : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+      
+      const currX = startX + ((stage1EndX - startX) * eased);
+      const microJitterY = startY + (Math.random() * 1.6 - 0.8);
 
       dispatchMouseSeq(btn, 'pointermove', currX, microJitterY);
       dispatchMouseSeq(btn, 'mousemove', currX, microJitterY);
       dispatchMouseSeq(btn, 'drag', currX, microJitterY);
 
-      // Tốc độ mượt mà: đoạn giữa 12ms, đoạn gần đích (>85%) chậm dần 22ms
-      const isNearEnd = progress > 0.85;
-      const stepDelay = isNearEnd ? (20 + Math.random() * 10) : (10 + Math.random() * 6);
+      const isNearEnd = progress > 0.80;
+      const stepDelay = isNearEnd ? (22 + Math.random() * 10) : (16 + Math.random() * 8);
       await new Promise(r => setTimeout(r, stepDelay));
-      lastX = currX;
     }
 
-    // 4. Dừng căn chỉnh chính xác tại đích 350ms (Đủ để TikTok ghi nhận khớp, không bị treo lâu)
-    await new Promise(r => setTimeout(r, 350 + Math.random() * 100));
+    // 5. Kéo lố nhẹ rồi lùi lại
+    if (willOvershoot && (!session || !session.isCancelled)) {
+      await new Promise(r => setTimeout(r, 160 + Math.random() * 80));
+      const correctionSteps = 12 + Math.floor(Math.random() * 4);
+      for (let i = 1; i <= correctionSteps; i++) {
+        if (session && session.isCancelled) {
+          dispatchMouseSeq(btn, 'mouseup', startX, startY);
+          return;
+        }
+        const prog = i / correctionSteps;
+        const currX = stage1EndX + ((finalEndX - stage1EndX) * prog);
+        const microJitterY = startY + (Math.random() * 1.0 - 0.5);
 
-    // 5. Nhả chuột hoàn tất
-    dispatchMouseSeq(btn, 'pointerup', lastX, startY);
-    dispatchMouseSeq(btn, 'mouseup', lastX, startY);
-    dispatchMouseSeq(btn, 'dragend', lastX, startY);
-    console.log(`[Captcha Drag] Đã kéo xong mượt mà: ${targetDistance}px.`);
+        dispatchMouseSeq(btn, 'pointermove', currX, microJitterY);
+        dispatchMouseSeq(btn, 'mousemove', currX, microJitterY);
+        dispatchMouseSeq(btn, 'drag', currX, microJitterY);
+        await new Promise(r => setTimeout(r, 18 + Math.random() * 8));
+      }
+    }
+
+    // 6. Dừng ngắm chuẩn
+    await new Promise(r => setTimeout(r, 380 + Math.random() * 150));
+    if (session && session.isCancelled) {
+      dispatchMouseSeq(btn, 'mouseup', startX, startY);
+      return;
+    }
+
+    // 7. Nhả chuột
+    dispatchMouseSeq(btn, 'pointerup', finalEndX, startY);
+    dispatchMouseSeq(btn, 'mouseup', finalEndX, startY);
+    dispatchMouseSeq(btn, 'dragend', finalEndX, startY);
+    console.log(`[CAPTCHA Interactor] Hoàn tất kéo chuột: ${targetDistance}px`);
   }
 
-  // Hàm mô phỏng click các điểm (Shapes / Icon / Point captcha): Mỗi click cách nhau đúng 1.25s, tổng 3 - 5s
-  async function simulateBiometricClickPoints(targetElement, pointsArray, submitButtonElement = null) {
-    const rect = targetElement.getBoundingClientRect();
-
-    for (let i = 0; i < pointsArray.length; i++) {
-      const pt = pointsArray[i];
-      // Tính toạ độ pixel từ tỉ lệ (xProportion, yProportion)
-      const clickX = rect.left + (pt.xProportion * rect.width);
-      const clickY = rect.top + (pt.yProportion * rect.height);
-
-      // Rê chuột tới vị trí điểm
-      dispatchMouseSeq(targetElement, 'mousemove', clickX, clickY);
-      await new Promise(r => setTimeout(r, 200 + Math.random() * 100));
-
-      // Bắn chuỗi sự kiện click
-      dispatchMouseSeq(targetElement, 'pointerdown', clickX, clickY);
-      dispatchMouseSeq(targetElement, 'mousedown', clickX, clickY);
-      await new Promise(r => setTimeout(r, 80 + Math.random() * 40));
-
-      dispatchMouseSeq(targetElement, 'pointerup', clickX, clickY);
-      dispatchMouseSeq(targetElement, 'mouseup', clickX, clickY);
-      dispatchMouseSeq(targetElement, 'click', clickX, clickY);
-
-      console.log(`[Captcha Timing] Đã click điểm ${i + 1}/${pointsArray.length} tại (${Math.round(clickX)}, ${Math.round(clickY)}). Chờ 1.25s...`);
-
-      // Khoảng cách giữa các cú click giải cách nhau đúng 1.25 giây (1250ms)
-      await new Promise(r => setTimeout(r, 1250 + (Math.random() * 100 - 50)));
-    }
-
-    // Nếu có nút Xác nhận (Submit button)
-    if (submitButtonElement) {
-      const subRect = submitButtonElement.getBoundingClientRect();
-      const subX = subRect.left + subRect.width / 2;
-      const subY = subRect.top + subRect.height / 2;
-
-      dispatchMouseSeq(submitButtonElement, 'mousemove', subX, subY);
+  // ================= 5. THEO DÕI XÁC NHẬN NỀN TẢNG =================
+  async function waitForPlatformVerification(checkStillExistsFn, timeoutMs = 4500) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
       await new Promise(r => setTimeout(r, 300));
+      const stillExists = checkStillExistsFn();
+      const errEl = document.querySelector(SELECTORS.ERROR_MESSAGE);
+      const isErrorVisible = errEl && isElementVisible(errEl);
 
-      dispatchMouseSeq(submitButtonElement, 'click', subX, subY);
-      console.log("[Captcha Timing] Đã click nút Xác nhận.");
+      if (isErrorVisible) {
+        return { status: "REJECTED", reason: "error_message_visible" };
+      }
+
+      if (!stillExists) {
+        return { status: "ACCEPTED", reason: "modal_dismissed" };
+      }
     }
+    return { status: "TIMEOUT_UNKNOWN", reason: "modal_still_present" };
   }
 
-  // Cố gắng tự giải qua Router Server (127.0.0.1:8000)
-  async function attemptAutoSolve() {
-    if (isAutoSolving) return;
+  // ================= 6. ĐIỀU PHỐI ĐƠN NHẤT (SINGLE-ACTOR MUTEX PIPELINE) =================
+  let isSolvingMutex = false;
 
-    const bgEl = document.querySelector(SELECTORS.PUZZLE_BG);
-    const pieceEl = document.querySelector(SELECTORS.PUZZLE_PIECE);
-    const sliderBtn = document.querySelector(SELECTORS.SLIDER_DRAG_BUTTON);
+  async function executeSolvePipeline() {
+    if (!isCoordinatorActive()) return;
 
-    const rotOuterEl = document.querySelector(SELECTORS.ROTATE_OUTER);
-    const rotInnerEl = document.querySelector(SELECTORS.ROTATE_INNER);
-    const rotSlideBarEl = document.querySelector(SELECTORS.ROTATE_SLIDE_BAR);
+    // SINGLE-ACTOR MUTEX: Chỉ cho phép 1 tác nhân duy nhất chạy tại 1 thời điểm
+    if (isSolvingMutex) {
+      console.log("[CAPTCHA Manager] 🔒 Đang có tác vụ giải đang chạy. Khóa Mutex ngăn chặn tác nhân thứ 2.");
+      return;
+    }
 
-    // DẠNG 1: PUZZLE SLIDER CAPTCHA
-    if (bgEl && pieceEl && sliderBtn && isElementVisible(bgEl) && isElementVisible(pieceEl)) {
-      const bgSrc = bgEl.getAttribute("src");
-      const pieceSrc = pieceEl.getAttribute("src");
-      if (bgSrc && pieceSrc) {
-        try {
-          isAutoSolving = true;
-          showBanner("Phát hiện Slider Captcha! Đang kết nối AI Hub để tính toạ độ...", true);
+    // Nếu người dùng đã chọn chế độ Giải tay -> Không gửi về server
+    if (stateManager.autoSolveDisabled) {
+      console.log("[CAPTCHA Manager] Chế độ Tự Giải AI đang tắt. Giữ nguyên trạng thái để người dùng giải tay.");
+      stateManager.transitionTo(CAPTCHA_STATES.MANUAL_REQUIRED, { reason: "auto_solve_disabled_by_user" });
+      return;
+    }
+
+    if ([CAPTCHA_STATES.ANALYZING, CAPTCHA_STATES.INTERACTING, CAPTCHA_STATES.PENDING_VERIFICATION].includes(stateManager.currentState)) {
+      return;
+    }
+
+    if (stateManager.currentSession && stateManager.currentSession.attempts >= stateManager.maxAutoAttempts) {
+      stateManager.transitionTo(CAPTCHA_STATES.MANUAL_REQUIRED, { reason: "max_attempts_reached" });
+      return;
+    }
+
+    const now = Date.now();
+    if (now - stateManager.lastAttemptTime < stateManager.minCooldownMs) {
+      return;
+    }
+    stateManager.lastAttemptTime = now;
+
+    isSolvingMutex = true;
+    const session = stateManager.currentSession || stateManager.createSession("slider");
+    session.attempts++;
+
+    try {
+      const bgEl = document.querySelector(SELECTORS.PUZZLE_BG);
+      const pieceEl = document.querySelector(SELECTORS.PUZZLE_PIECE);
+      const sliderBtn = document.querySelector(SELECTORS.SLIDER_DRAG_BUTTON);
+
+      const rotOuterEl = document.querySelector(SELECTORS.ROTATE_OUTER);
+      const rotInnerEl = document.querySelector(SELECTORS.ROTATE_INNER);
+      const rotSlideBarEl = document.querySelector(SELECTORS.ROTATE_SLIDE_BAR);
+
+      // --- DẠNG 1: SLIDER CAPTCHA ---
+      if (bgEl && pieceEl && sliderBtn && isElementVisible(bgEl) && isElementVisible(pieceEl)) {
+        const bgSrc = bgEl.getAttribute("src");
+        const pieceSrc = pieceEl.getAttribute("src");
+        if (bgSrc && pieceSrc) {
+          stateManager.transitionTo(CAPTCHA_STATES.ANALYZING, { session_id: session.sessionId, attempt: session.attempts });
 
           const [bgB64, pieceB64] = await Promise.all([
             fetchImageBase64(bgSrc),
             fetchImageBase64(pieceSrc)
           ]);
 
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 6000);
+          if (session.isCancelled) return;
 
           const resp = await fetch(UNIFIED_API, {
             method: "POST",
@@ -267,65 +521,104 @@
               image_bg: bgB64,
               image_piece: pieceB64
             }),
-            signal: ctrl.signal
-          }).finally(() => clearTimeout(timer));
+            signal: session.abortController.signal
+          });
 
           const resData = await resp.json();
           if (!resData.success || !resData.data) {
-            throw new Error(resData.error || "Server không trả kết quả");
+            throw new Error(resData.error || "AI Hub không trả kết quả toạ độ");
           }
+
+          if (session.isCancelled) return;
 
           const { slide_x_proportion, source, phash, raw_x } = resData.data;
-          lastSolvedInfo = {
-            phash: phash || null,
-            sample_type: "slider",
-            solution: slide_x_proportion,
-            extra_data: JSON.stringify({ raw_x: raw_x || 0 })
-          };
+          session.aiResult = { status: "SUCCESS", slide_x_proportion, confidence: resData.data.confidence, source };
+          session.phash = phash;
+          session.solution = slide_x_proportion;
 
-          const providerName = source === "golden_memory" ? "🧠 Trí Nhớ Vàng (<1ms)" : "🤖 OpenCV AI";
-          showBanner(`Đã khớp toạ độ qua <b>${providerName}</b>. Đang tự kéo mảnh ghép...`, true);
+          stateManager.transitionTo(CAPTCHA_STATES.INTERACTING, { proportion: slide_x_proportion, source });
 
-          const domWidth = bgEl.getBoundingClientRect().width;
-          let targetDistance = Math.round(slide_x_proportion * domWidth) - 3;
+          const bgRect = bgEl.getBoundingClientRect();
+          const domWidth = bgRect.width;
+          const pieceRect = pieceEl.getBoundingClientRect();
+          const initialPieceOffset = Math.max(0, pieceRect.left - bgRect.left);
 
-          await simulateBiometricDrag(sliderBtn, targetDistance);
-          await new Promise(r => setTimeout(r, 1500));
+          let targetDistance = Math.round(slide_x_proportion * domWidth) - initialPieceOffset;
+          if (targetDistance < 10) targetDistance = Math.round(slide_x_proportion * domWidth);
 
-          if (!document.querySelector(SELECTORS.PUZZLE_BG)) {
-            console.log("[KOC VIP] Tự động giải Slider Captcha thành công!");
-            autoSolveAttempts = 0;
-            hideBanner();
-            return;
+          await simulateBiometricDrag(sliderBtn, targetDistance, session);
+          if (session.isCancelled) return;
+
+          session.interactionResult = { status: "COMPLETED", targetDistance };
+
+          stateManager.transitionTo(CAPTCHA_STATES.PENDING_VERIFICATION, { targetDistance });
+
+          const verResult = await waitForPlatformVerification(() => {
+            const el = document.querySelector(SELECTORS.PUZZLE_BG);
+            return el && isElementVisible(el);
+          }, 4500);
+
+          if (session.isCancelled) return;
+          session.platformStatus = verResult.status;
+
+          if (verResult.status === "ACCEPTED") {
+            stateManager.transitionTo(CAPTCHA_STATES.RESOLVED, { reason: "verified_success" });
+            if (session.phash && !session.isCancelled) {
+              fetch(FEEDBACK_API, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phash: session.phash,
+                  captcha_type: "slider",
+                  exact_solution: session.solution,
+                  is_correct: true
+                })
+              }).catch(() => {});
+            }
           } else {
-            autoSolveAttempts++;
-          }
-        } catch (err) {
-          console.warn("[KOC VIP] Lỗi giải Slider Captcha:", err.message);
-          autoSolveAttempts++;
-        } finally {
-          setTimeout(() => { isAutoSolving = false; }, 1500);
-        }
-        return;
-      }
-    }
+            console.warn(`[CAPTCHA Manager] Nền tảng từ chối (Lý do: ${verResult.reason})`);
+            if (session.phash && !session.isCancelled) {
+              fetch(FEEDBACK_API, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phash: session.phash,
+                  captcha_type: "slider",
+                  exact_solution: session.solution,
+                  is_correct: false
+                })
+              }).catch(() => {});
+            }
 
-    // DẠNG 2: ROTATE CIRCLE CAPTCHA
-    if (rotOuterEl && rotInnerEl && sliderBtn && isElementVisible(rotOuterEl)) {
-      const outerSrc = rotOuterEl.getAttribute("src");
-      const innerSrc = rotInnerEl.getAttribute("src");
-      if (outerSrc && innerSrc) {
-        try {
-          isAutoSolving = true;
-          showBanner("Phát hiện Rotate Captcha! Đang quét góc xoay phù hợp...", true);
+            if (session.attempts < stateManager.maxAutoAttempts && !session.isCancelled) {
+              stateManager.transitionTo(CAPTCHA_STATES.DETECTED, { reason: "retry_attempt_2" });
+              await new Promise(r => setTimeout(r, 1800));
+              const refreshBtn = document.querySelector(SELECTORS.REFRESH_BTN);
+              if (refreshBtn && !session.isCancelled) {
+                try { refreshBtn.click(); } catch(e){}
+              }
+              await new Promise(r => setTimeout(r, 2000));
+            } else {
+              stateManager.transitionTo(CAPTCHA_STATES.MANUAL_REQUIRED, { reason: "exceeded_max_attempts" });
+            }
+          }
+          return;
+        }
+      }
+
+      // --- DẠNG 2: ROTATE CAPTCHA ---
+      if (rotOuterEl && rotInnerEl && sliderBtn && isElementVisible(rotOuterEl)) {
+        const outerSrc = rotOuterEl.getAttribute("src");
+        const innerSrc = rotInnerEl.getAttribute("src");
+        if (outerSrc && innerSrc) {
+          stateManager.transitionTo(CAPTCHA_STATES.ANALYZING, { session_id: session.sessionId });
 
           const [outerB64, innerB64] = await Promise.all([
             fetchImageBase64(outerSrc),
             fetchImageBase64(innerSrc)
           ]);
 
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 6000);
+          if (session.isCancelled) return;
 
           const resp = await fetch(UNIFIED_API, {
             method: "POST",
@@ -335,57 +628,110 @@
               image_bg: outerB64,
               image_piece: innerB64
             }),
-            signal: ctrl.signal
-          }).finally(() => clearTimeout(timer));
+            signal: session.abortController.signal
+          });
 
           const resData = await resp.json();
           if (!resData.success || !resData.data) {
             throw new Error(resData.error || "Server không trả kết quả góc xoay");
           }
 
-          const { angle, source, phash } = resData.data;
-          lastSolvedInfo = {
-            phash: phash || null,
-            sample_type: "rotate",
-            solution: angle,
-            extra_data: ""
-          };
+          if (session.isCancelled) return;
 
-          const providerName = source === "golden_memory" ? "🧠 Trí Nhớ Vàng (<1ms)" : "🔄 Polar AI";
-          showBanner(`Góc xoay: <b>${angle.toFixed(1)}°</b> (${providerName}). Đang tự kéo...`, true);
+          const { angle, source, phash } = resData.data;
+          session.aiResult = { status: "SUCCESS", angle, source };
+          session.phash = phash;
+          session.solution = angle;
+
+          stateManager.transitionTo(CAPTCHA_STATES.INTERACTING, { angle });
 
           const barWidth = rotSlideBarEl ? rotSlideBarEl.getBoundingClientRect().width : 340;
           const iconWidth = sliderBtn.getBoundingClientRect().width || 40;
           const targetDistance = Math.round(((barWidth - iconWidth) * angle) / 360);
 
-          await simulateBiometricDrag(sliderBtn, targetDistance);
-          await new Promise(r => setTimeout(r, 1500));
+          await simulateBiometricDrag(sliderBtn, targetDistance, session);
+          if (session.isCancelled) return;
 
-          if (!document.querySelector(SELECTORS.ROTATE_OUTER)) {
-            console.log("[KOC VIP] Tự động giải Rotate Captcha thành công!");
-            autoSolveAttempts = 0;
-            hideBanner();
-            return;
+          session.interactionResult = { status: "COMPLETED", targetDistance };
+
+          stateManager.transitionTo(CAPTCHA_STATES.PENDING_VERIFICATION, { targetDistance });
+
+          const verResult = await waitForPlatformVerification(() => {
+            const el = document.querySelector(SELECTORS.ROTATE_OUTER);
+            return el && isElementVisible(el);
+          }, 4500);
+
+          if (session.isCancelled) return;
+          session.platformStatus = verResult.status;
+
+          if (verResult.status === "ACCEPTED") {
+            stateManager.transitionTo(CAPTCHA_STATES.RESOLVED, { reason: "rotate_verified" });
+            if (session.phash && !session.isCancelled) {
+              fetch(FEEDBACK_API, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phash: session.phash,
+                  captcha_type: "rotate",
+                  exact_solution: angle,
+                  is_correct: true
+                })
+              }).catch(() => {});
+            }
           } else {
-            autoSolveAttempts++;
-          }
-        } catch (err) {
-          console.warn("[KOC VIP] Lỗi giải Rotate Captcha:", err.message);
-          autoSolveAttempts++;
-        } finally {
-          setTimeout(() => { isAutoSolving = false; }, 1500);
-        }
-        return;
-      }
-    }
+            console.warn(`[CAPTCHA Manager] Rotate bị từ chối (${verResult.reason})`);
+            if (session.phash && !session.isCancelled) {
+              fetch(FEEDBACK_API, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phash: session.phash,
+                  captcha_type: "rotate",
+                  exact_solution: angle,
+                  is_correct: false
+                })
+              }).catch(() => {});
+            }
 
-    // Nếu đã thử 2 lần thất bại hoặc dạng khác -> Chuyển sang giải tay
-    if (autoSolveAttempts >= 2) {
-      showBanner("Vui lòng kéo thanh trượt trên màn hình để giải Captcha. Tiện ích sẽ <b>tự động tiếp tục</b> ngay sau khi bạn giải xong.", false);
+            if (session.attempts < stateManager.maxAutoAttempts && !session.isCancelled) {
+              stateManager.transitionTo(CAPTCHA_STATES.DETECTED, { reason: "retry_rotate" });
+              await new Promise(r => setTimeout(r, 1800));
+              const refreshBtn = document.querySelector(SELECTORS.REFRESH_BTN);
+              if (refreshBtn && !session.isCancelled) {
+                try { refreshBtn.click(); } catch(e){}
+              }
+              await new Promise(r => setTimeout(r, 2000));
+            } else {
+              stateManager.transitionTo(CAPTCHA_STATES.MANUAL_REQUIRED, { reason: "exceeded_max_attempts" });
+            }
+          }
+          return;
+        }
+      }
+    } catch (err) {
+      if (err.name === "AbortError" || session.isCancelled) {
+        console.log("[CAPTCHA Manager] Tác vụ đã được người dùng hủy thành công.");
+      } else {
+        console.warn("[CAPTCHA Manager] Lỗi trong luồng xử lý:", err.message);
+        if (session.attempts >= stateManager.maxAutoAttempts) {
+          stateManager.transitionTo(CAPTCHA_STATES.MANUAL_REQUIRED, { error: err.message });
+        } else {
+          stateManager.transitionTo(CAPTCHA_STATES.DETECTED, { error: err.message });
+        }
+      }
+    } finally {
+      isSolvingMutex = false;
     }
   }
 
+  // ================= 7. GIÁM SÁT DOM VÀ PHÁT HIỆN SỰ KIỆN CAPTCHA =================
   function checkCaptchaInDOM() {
+    if (!isCoordinatorActive()) {
+      if (observer) observer.disconnect();
+      if (pollTimer) clearInterval(pollTimer);
+      return;
+    }
+
     let found = false;
     for (const sel of SELECTORS.MODAL_DETECTORS) {
       const el = document.querySelector(sel);
@@ -395,62 +741,93 @@
       }
     }
 
-    if (found && !isCaptchaActive) {
-      isCaptchaActive = true;
-      playAlertBeep();
-      try {
-        chrome.runtime.sendMessage({
-          type: "KOCVIP_NOTIFY_CAPTCHA",
-          payload: { message: "TikTok đang yêu cầu giải Captcha trên màn hình." }
-        });
-      } catch {}
-
-      // Thử tự giải tự động trước
-      attemptAutoSolve();
-
-    } else if (found && isCaptchaActive) {
-      // Nếu vẫn còn và chưa tự giải thành công, thử lại
-      if (autoSolveAttempts < 2 && !isAutoSolving) {
-        attemptAutoSolve();
+    if (found) {
+      if (stateManager.currentState === CAPTCHA_STATES.IDLE || stateManager.currentState === CAPTCHA_STATES.RESOLVED) {
+        stateManager.createSession("slider");
+        stateManager.transitionTo(CAPTCHA_STATES.DETECTED);
+        playAlertBeep();
+        executeSolvePipeline();
+      } else if (stateManager.currentState === CAPTCHA_STATES.DETECTED) {
+        executeSolvePipeline();
       }
-    } else if (!found && isCaptchaActive) {
-      isCaptchaActive = false;
-      autoSolveAttempts = 0;
-      hideBanner();
-      console.log("[KOC VIP] Captcha đã biến mất khỏi màn hình (Xác minh thành công).");
+    } else {
+      if (stateManager.currentState !== CAPTCHA_STATES.IDLE && stateManager.currentState !== CAPTCHA_STATES.RESOLVED) {
+        console.log("[CAPTCHA Manager] Captcha đã biến mất khỏi màn hình -> Xác nhận RESOLVED.");
+        stateManager.transitionTo(CAPTCHA_STATES.RESOLVED);
+        
+        try {
+          chrome.runtime.sendMessage({
+            type: "KOCVIP_PROGRESS_UPDATE",
+            payload: { status: "captcha_resolved", message: "Đã giải xong Captcha. Tiếp tục công việc..." },
+          });
+        } catch {}
 
-      // ACTIVE LEARNING FEEDBACK: Nạp vào Trí Nhớ Vàng (Golden Memory)
-      if (lastSolvedInfo && lastSolvedInfo.phash) {
-        console.log("[KOC VIP] ⚡ Gửi phản hồi thành công vào Trí Nhớ Vàng (Golden Memory)...", lastSolvedInfo);
-        fetch(FEEDBACK_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            phash: lastSolvedInfo.phash,
-            sample_type: lastSolvedInfo.sample_type,
-            solution: lastSolvedInfo.solution,
-            extra_data: lastSolvedInfo.extra_data,
-            status: "success"
-          })
-        }).then(r => r.json()).then(fbRes => {
-          console.log("[KOC VIP] ✅ Trí Nhớ Vàng đã học mẫu này! Lần sau gặp lại sẽ giải siêu tốc <1ms:", fbRes);
-        }).catch(e => {
-          console.warn("[KOC VIP] Không gửi được feedback:", e);
-        });
-        lastSolvedInfo = null;
+        setTimeout(() => {
+          if (stateManager.currentState === CAPTCHA_STATES.RESOLVED) {
+            stateManager.transitionTo(CAPTCHA_STATES.IDLE);
+          }
+        }, 1500);
       }
-
-      try {
-        chrome.runtime.sendMessage({
-          type: "KOCVIP_PROGRESS_UPDATE",
-          payload: { status: "captcha_resolved", message: "Đã giải xong Captcha. Tiếp tục gửi lời mời..." },
-        });
-      } catch {}
     }
   }
 
+  function focusAndHighlightCaptcha() {
+    let targetEl = null;
+    for (const sel of SELECTORS.MODAL_DETECTORS) {
+      const el = document.querySelector(sel);
+      if (el && isElementVisible(el)) {
+        targetEl = el.closest(".captcha-verify-container, .secsdk_captcha_modal, .captcha-disable-scroll") || el;
+        break;
+      }
+    }
+
+    if (!targetEl) {
+      targetEl = document.querySelector(SELECTORS.CONTAINER) || document.querySelector(SELECTORS.PUZZLE_BG);
+    }
+
+    if (targetEl) {
+      try {
+        targetEl.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+        const oldBoxShadow = targetEl.style.boxShadow;
+        const oldTransition = targetEl.style.transition;
+        const oldOutline = targetEl.style.outline;
+
+        targetEl.style.transition = "all 0.3s ease";
+        targetEl.style.outline = "4px solid #EF4444";
+        targetEl.style.outlineOffset = "4px";
+        targetEl.style.boxShadow = "0 0 0 8px rgba(239, 68, 68, 0.4), 0 0 40px rgba(239, 68, 68, 0.7)";
+
+        const sliderBtn = targetEl.querySelector(SELECTORS.SLIDER_DRAG_BUTTON) || document.querySelector(SELECTORS.SLIDER_DRAG_BUTTON);
+        if (sliderBtn) {
+          try { sliderBtn.focus(); } catch {}
+        }
+
+        setTimeout(() => {
+          if (targetEl) {
+            targetEl.style.outline = oldOutline || "";
+            targetEl.style.outlineOffset = "";
+            targetEl.style.boxShadow = oldBoxShadow || "";
+            targetEl.style.transition = oldTransition || "";
+          }
+        }, 3500);
+      } catch (err) {
+        console.warn("[CAPTCHA Manager] Không thể highlight:", err);
+      }
+    }
+  }
+
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg && msg.type === "KOCVIP_FOCUS_CAPTCHA") {
+        focusAndHighlightCaptcha();
+      }
+    });
+  } catch {}
+
+  let domCheckDebounce = null;
   const observer = new MutationObserver(() => {
-    checkCaptchaInDOM();
+    if (domCheckDebounce) clearTimeout(domCheckDebounce);
+    domCheckDebounce = setTimeout(checkCaptchaInDOM, 250);
   });
 
   observer.observe(document.documentElement, {
@@ -460,6 +837,6 @@
     attributeFilter: ["src", "style", "class"]
   });
 
-  setInterval(checkCaptchaInDOM, 1000);
-  console.log("[KOC VIP] Hybrid Auto/Manual Captcha Solver loaded.");
+  const pollTimer = setInterval(checkCaptchaInDOM, 1500);
+  console.log(`[CAPTCHA State Manager] Single-Actor Mutex Loaded [${COORDINATOR_ID}].`);
 })();

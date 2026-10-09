@@ -331,6 +331,7 @@
             style="padding: 4px 10px; font-weight: 600; cursor: pointer;">← Quay lại</button>
           <h2 style="font-size: 16px; font-weight: 700;">🚀 Tiến trình gửi lời mời KOC VIP</h2>
           <span id="execStopwatchBadge" class="stopwatch-badge" title="Thời gian chạy thực tế">⏱️ 00:00:00</span>
+          <span id="execCountdownBadge" class="countdown-badge" title="Thời gian ước tính còn lại" hidden>⏳ Còn lại: ~--:--</span>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
           <button type="button" id="btnExportKocExcel" class="secondary-button-sm"
@@ -352,6 +353,7 @@
             bảng</button>
         </div>
       </div>
+
 
       <div class="metrics-row">
         <div class="metric-box success">
@@ -376,8 +378,9 @@
         <div class="progress-bar-outer">
           <div id="execProgressBar" class="progress-bar-inner"></div>
         </div>
-        <div class="progress-text-row">
+        <div class="progress-text-row" style="display: flex; justify-content: space-between; align-items: center;">
           <span id="execProgressStatus">Đang chuẩn bị...</span>
+          <span id="execProgressEta" class="progress-eta-text">⏳ Dự kiến xong: ~--:--</span>
           <span id="execProgressPercent">0%</span>
         </div>
       </div>
@@ -390,6 +393,74 @@
 
       <div class="execution-log" id="execLogContent">
         <div>[Khởi tạo] Hệ thống sẵn sàng...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Xác Nhận Cao Cấp (Custom Confirm Modal) -->
+  <div id="customConfirmModal" class="custom-modal-overlay" hidden>
+    <div class="custom-modal-backdrop" id="customConfirmBackdrop"></div>
+    <div class="custom-modal-card">
+      <div class="custom-modal-header">
+        <div class="custom-modal-icon-badge" id="customConfirmIconBadge">🚀</div>
+        <div class="custom-modal-header-text">
+          <h3 id="customConfirmTitle">XÁC NHẬN GỬI THẬT</h3>
+          <p id="customConfirmSubtitle">Vui lòng kiểm tra kỹ các thông tin trước khi bắt đầu gửi lời mời</p>
+        </div>
+        <button type="button" class="custom-modal-close-btn" id="customConfirmCloseBtn" title="Đóng">✕</button>
+      </div>
+
+      <div class="custom-modal-body" id="customConfirmBody">
+        <!-- Nội dung bảng tóm tắt cấu hình được render động -->
+      </div>
+
+      <div class="custom-modal-footer">
+        <button type="button" class="modal-btn-cancel" id="customConfirmBtnCancel">Quay lại</button>
+        <button type="button" class="modal-btn-confirm" id="customConfirmBtnOk">🚀 Bắt đầu gửi ngay</button>
+      </div>
+    </div>
+  <!-- Modal Báo Cáo Tổng Kết Ngắn Gọn Khi Hoàn Tất -->
+  <div id="completionReportModal" class="custom-modal-overlay" hidden>
+    <div class="custom-modal-backdrop" id="completionReportBackdrop"></div>
+    <div class="custom-modal-card" style="max-width: 520px; border-radius: 18px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 25px 60px rgba(0,0,0,0.5);">
+      <div class="custom-modal-header" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(99,102,241,0.15)); border-bottom: 1px solid rgba(255,255,255,0.08);">
+        <div class="custom-modal-icon-badge" style="background: rgba(16,185,129,0.2); border: 1px solid #10B981; font-size: 26px;">🎉</div>
+        <div class="custom-modal-header-text">
+          <h3 id="reportTitle" style="color: #10B981; font-size: 18px; font-weight: 700;">ĐÃ HOÀN TẤT ĐỢT MỜI KOC!</h3>
+          <p id="reportSubtitle" style="color: var(--text-sub); font-size: 12px;">Toàn bộ KOC trong danh sách đã được xử lý xong</p>
+        </div>
+        <button type="button" class="custom-modal-close-btn" id="completionReportCloseBtn" title="Đóng">✕</button>
+      </div>
+
+      <div class="custom-modal-body" id="completionReportBody" style="padding: 1.25rem;">
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 1rem;">
+          <div style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); padding: 12px; border-radius: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #10B981; font-weight: 600;">✅ THÀNH CÔNG</div>
+            <div id="reportSent" style="font-size: 22px; font-weight: 800; color: #10B981; margin-top: 2px;">0</div>
+          </div>
+          <div style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); padding: 12px; border-radius: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #F59E0B; font-weight: 600;">⏭️ BỎ QUA / TRÙNG</div>
+            <div id="reportSkipped" style="font-size: 22px; font-weight: 800; color: #F59E0B; margin-top: 2px;">0</div>
+          </div>
+          <div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); padding: 12px; border-radius: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #EF4444; font-weight: 600;">❌ THẤT BẠI</div>
+            <div id="reportFailed" style="font-size: 22px; font-weight: 800; color: #EF4444; margin-top: 2px;">0</div>
+          </div>
+          <div style="background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.3); padding: 12px; border-radius: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #818CF8; font-weight: 600;">⏱️ THỜI GIAN CHẠY</div>
+            <div id="reportTime" style="font-size: 20px; font-weight: 800; color: #818CF8; margin-top: 2px;">00:00</div>
+          </div>
+        </div>
+
+        <div id="reportCampInfo" style="font-size: 11px; color: var(--text-sub); background: rgba(255,255,255,0.03); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); margin-bottom: 0.25rem;">
+          <!-- Tên đợt mời & Tổng KOC -->
+        </div>
+      </div>
+
+      <div class="custom-modal-footer" style="display: flex; gap: 8px; justify-content: flex-end; padding: 1rem 1.25rem; background: rgba(0,0,0,0.2); border-top: 1px solid rgba(255,255,255,0.08);">
+        <button type="button" id="btnReportExportExcel" class="secondary-button-sm" style="padding: 6px 14px; font-size: 12px; background: rgba(16,185,129,0.15); color: #10B981; border: 1px solid #10B981;">📊 Xuất Excel</button>
+        <button type="button" id="btnReportCopyKoc" class="secondary-button-sm" style="padding: 6px 14px; font-size: 12px;">📋 Copy KOC</button>
+        <button type="button" id="btnReportClose" class="primary-button-sm" style="padding: 6px 16px; font-size: 12px; font-weight: 600;">✕ Đóng & Tạo đợt mới</button>
       </div>
     </div>
   </div>

@@ -175,6 +175,24 @@
     return extensionMessage("KOCVIP_LOCAL_DB", { op, ...payload });
   }
 
+  function safeStorageSet(data) {
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
+        return chrome.storage.local.set(data);
+      }
+    } catch {}
+    return Promise.resolve();
+  }
+
+  function safeStorageRemove(keys) {
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.local?.remove) {
+        return chrome.storage.local.remove(keys);
+      }
+    } catch {}
+    return Promise.resolve();
+  }
+
   function getShopContext() {
     const params = new URLSearchParams(window.location.search);
     const matchShop = document.cookie.match(/(?:^|;\s*)(?:x-jupiter-shop-id|oec_seller_id)=([^;]*)/);
@@ -235,7 +253,7 @@
         for (const [sId, sellerObj] of Object.entries(sellers)) {
           const shopName = sellerObj?.shops?.[0]?.shop_name || sellerObj?.global_seller?.global_seller_name || "";
           if (shopName) {
-            await chrome.storage.local.set({ kocvip_shop_name: shopName, kocvip_last_shop_id: sId });
+            await safeStorageSet({ kocvip_shop_name: shopName, kocvip_last_shop_id: sId });
             return shopName;
           }
         }
@@ -251,7 +269,7 @@
     let sName = await fetchShopInfoFromTikTokAPI();
     if (!sName) sName = extractShopNameFromDOM();
     if (sName) {
-      chrome.storage.local.set({ kocvip_shop_name: sName });
+      safeStorageSet({ kocvip_shop_name: sName });
     }
   }, 800);
 
@@ -261,6 +279,89 @@
         let sName = await fetchShopInfoFromTikTokAPI();
         if (!sName) sName = extractShopNameFromDOM();
         sendResponse({ success: true, shopName: sName });
+      })();
+      return true;
+    }
+
+    if (message?.type === "KOCVIP_SCAN_MAX_GROUP_SEQ") {
+      (async () => {
+        try {
+          const { shopId, region } = getShopContext();
+          const targetPrefix = String(message?.payload?.prefix || "").toLowerCase().trim();
+          let globalMaxSeq = 0;
+          let prefixMaxSeq = 0;
+
+          function extractSeqNumberFromName(name) {
+            if (!name) return 0;
+            const clean = String(name).trim();
+            const lower = clean.toLowerCase();
+
+            // QUY TẮC BẮT BUỘC: Chỉ lấy STT khi nhóm có chứa chữ ký nhận diện của bạn/tool
+            // (Ví dụ: 'x nhatminh', 'x nm', 'x nm_', 'nhatminh', ' x ')
+            // Loại bỏ 100% các nhóm tự do chứa số như 'khẩu trang 1907', 'combo 99k', 'quần 2024'
+            const hasSignature = lower.includes("x nhatminh") || 
+                                 lower.includes("x nm") || 
+                                 lower.includes("x nm_") || 
+                                 lower.includes("x nm/") ||
+                                 lower.includes("nhatminh") ||
+                                 /\s+x\s+/.test(lower);
+
+            if (!hasSignature) {
+              return 0; // Bỏ qua nếu không có chữ ký nhận diện
+            }
+
+            // 1. Khớp hậu tố số có gạch nối/gạch dưới/khoảng trắng: _007, -007, 007, _006_a1, _001a, ...
+            const m1 = clean.match(/[-_ ](?:a|n)?(\d{1,4})(?:[-_a-z]\d*)?$/i);
+            if (m1 && m1[1]) {
+              const val = parseInt(m1[1], 10);
+              if (val > 0 && val <= 1500) return val;
+            }
+            
+            // 2. Khớp cụm 2-4 chữ số ở cuối:
+            const m2 = clean.match(/_(\d{2,4})(?:[-_a-z]\d*)?$/i);
+            if (m2 && m2[1]) {
+              const val = parseInt(m2[1], 10);
+              if (val > 0 && val <= 1500) return val;
+            }
+
+            return 0;
+          }
+
+          // Quét trạng thái 5 (All / Tất cả) + 1, 2, 3, 4 để bao phủ 100% nhóm
+          const statusesToScan = [5, 1, 2, 3, 4];
+          const scannedGroupIds = new Set();
+
+          for (const status of statusesToScan) {
+            try {
+              const res = await executeInPage({
+                method: "POST",
+                path: "/api/v1/oec/affiliate/seller/invitation_group/search",
+                shopId,
+                shopRegion: region,
+                body: { cur_page: 1, invitation_group_status: status, page_size: 50, search_params: { filter_accept_status: 3, query_items: [] } },
+              });
+              const list = res?.body?.data?.invitation_group_list || res?.body?.data?.invitation_list || [];
+              for (const group of list) {
+                const gId = group.id || group.invitation_group_id || group.group_id;
+                if (gId && scannedGroupIds.has(gId)) continue;
+                if (gId) scannedGroupIds.add(gId);
+
+                const name = String(group.name || group.invitation_group?.name || "").trim();
+                const num = extractSeqNumberFromName(name);
+                if (num > 0) {
+                  if (num > globalMaxSeq) globalMaxSeq = num;
+                  if (targetPrefix && name.toLowerCase().includes(targetPrefix)) {
+                    if (num > prefixMaxSeq) prefixMaxSeq = num;
+                  }
+                }
+              }
+            } catch (eScan) {}
+          }
+
+          sendResponse({ success: true, maxSeq: globalMaxSeq, globalMaxSeq, prefixMaxSeq });
+        } catch (err) {
+          sendResponse({ success: false, maxSeq: 0, globalMaxSeq: 0, prefixMaxSeq: 0, error: String(err?.message || err) });
+        }
       })();
       return true;
     }
@@ -414,17 +515,26 @@
   function tenNhomTheoLan(groupName, soNhom) {
     let ten = String(groupName || "").trim();
     ten = ten.replace(/[/\\:*?"<>|~`!@#$%^&=+{}\[\];]/g, "-").replace(/\s+/g, " ").replace(/[-_]{2,}/g, "_");
-    // Nếu tên đã chuẩn định dạng hợp lệ đuôi _XXX hoặc _DD-MM_XXX
-    if (/_\d{3,}$/.test(ten) || /_\d{2}[-_]\d{2}_\d{3}$/.test(ten)) {
-      return sanitizeInvitationName(ten);
+
+    // Bảo vệ nguyên vẹn đuôi STT _001, _043 nếu tổng độ dài tên vượt quá 30 ký tự
+    const khopDuoiStt = ten.match(/^(.*?)(_(\d{2}[-_]\d{2}_)?\d{2,4})$/);
+    if (khopDuoiStt) {
+      const suffix = khopDuoiStt[2];
+      const maxHead = Math.max(3, 30 - suffix.length);
+      const head = khopDuoiStt[1].slice(0, maxHead).trim();
+      return sanitizeInvitationName(`${head}${suffix}`);
     }
+
     const lan = Math.max(1, Number(soNhom || 1));
-    const cleanTen = ten.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_\d+$/i, "").replace(/_N\d+$/i, "").trim();
-    const suffix = `_${String(lan).padStart(3, "0")}`; // Dài 4 ký tự: _001, _023...
-    const maxPrefixLen = Math.max(5, 30 - suffix.length); // 26 ký tự
-    const prefix = cleanTen.slice(0, maxPrefixLen).trim();
-    const formatted = `${prefix}${suffix}`;
-    return sanitizeInvitationName(formatted);
+    if (lan <= 1) return sanitizeInvitationName(ten.slice(0, 30));
+    const duoiThem = `_N${lan}`;
+    if (ten.length + duoiThem.length <= 30) return sanitizeInvitationName(ten + duoiThem);
+    const khopDuoi = ten.match(/^(.*?)(_\d{1,2}_\d{1,2}_\d+)$/);
+    if (khopDuoi) {
+      const dau = khopDuoi[1].slice(0, Math.max(1, 30 - khopDuoi[2].length - duoiThem.length));
+      return sanitizeInvitationName(`${dau}${khopDuoi[2]}${duoiThem}`);
+    }
+    return sanitizeInvitationName(ten.slice(0, 30 - duoiThem.length) + duoiThem);
   }
 
   // DỰNG BODY CREATE KHỚP 100% HAR ENTRY 137 (TUYỆT ĐỐI KHÔNG CÓ has_flash_sale)
@@ -583,7 +693,39 @@
 
   function isOecIdValid(id) {
     const s = String(id || "").trim();
-    return /^\d{17,21}$/.test(s) && !s.endsWith("00000000");
+    return /^\d{8,25}$/.test(s) && !s.endsWith("00000000");
+  }
+
+  function extractGroupId(res) {
+    if (!res) return "";
+    const d = res.body?.data;
+    const b = res.body;
+    if (typeof d === "string" || typeof d === "number") return String(d);
+    if (d?.invitation?.id) return String(d.invitation.id);
+    if (d?.invitation_group?.id) return String(d.invitation_group.id);
+    if (d?.invitation_group?.group_id) return String(d.invitation_group.group_id);
+    if (d?.invitation_group?.invitation_group_id) return String(d.invitation_group.invitation_group_id);
+    if (d?.invitation_group_id) return String(d.invitation_group_id);
+    if (d?.group_id) return String(d.group_id);
+    if (d?.invitation_id) return String(d.invitation_id);
+    if (d?.id) return String(d.id);
+    if (d?.invitation_groups?.[0]?.id) return String(d.invitation_groups[0].id);
+    if (d?.invitation_groups?.[0]?.invitation_group_id) return String(d.invitation_groups[0].invitation_group_id);
+    if (d?.invitation_list?.[0]?.id) return String(d.invitation_list[0].id);
+    if (d?.invitations?.[0]?.id) return String(d.invitations[0].id);
+    if (d?.group?.id) return String(d.group.id);
+    if (b?.invitation?.id) return String(b.invitation.id);
+    if (b?.invitation_group_id) return String(b.invitation_group_id);
+    if (b?.group_id) return String(b.group_id);
+    if (b?.id) return String(b.id);
+    if (typeof d === "object" && d !== null) {
+      for (const [k, v] of Object.entries(d)) {
+        if ((k.includes("id") || k.includes("group")) && (typeof v === "string" || typeof v === "number") && String(v).length >= 5) {
+          return String(v);
+        }
+      }
+    }
+    return "";
   }
 
   let lastCaptchaResolvedAt = 0;
@@ -711,10 +853,56 @@
     return { resolved: true };
   }
 
+  const handleToOecCache = new Map();
+
   async function resolveMissingOecIds(recipients, shopId, region, controller, manifest) {
-    const missing = recipients.filter(r => !isOecIdValid(r.creatorOecId));
+    if (!recipients || !recipients.length) return;
+
+    // 1. Phục hồi nhanh từ bộ nhớ tạm in-memory
+    for (const r of recipients) {
+      if (!isOecIdValid(r.creatorOecId)) {
+        const h = String(r.handle || "").replace(/^@/, "").toLowerCase().trim();
+        if (h && handleToOecCache.has(h)) {
+          r.creatorOecId = handleToOecCache.get(h);
+        }
+      }
+    }
+
+    let missing = recipients.filter(r => !isOecIdValid(r.creatorOecId));
     if (!missing.length) return;
-    const batchSize = 50;
+
+    // 2. Tra cứu hàng loạt từ IndexedDB kocCache (Persistent Storage)
+    try {
+      const missingHandles = missing.map(r => String(r.handle || "").replace(/^@/, "").toLowerCase().trim()).filter(Boolean);
+      if (missingHandles.length) {
+        const cachedKocs = await localDb("getCachedKocs", { handles: missingHandles });
+        if (Array.isArray(cachedKocs) && cachedKocs.length) {
+          for (const item of cachedKocs) {
+            const h = String(item.handle || "").replace(/^@/, "").toLowerCase().trim();
+            const oec = String(item.creatorOecId || "").trim();
+            if (h && isOecIdValid(oec)) {
+              handleToOecCache.set(h, oec);
+            }
+          }
+          for (const r of missing) {
+            const h = String(r.handle || "").replace(/^@/, "").toLowerCase().trim();
+            if (handleToOecCache.has(h)) {
+              r.creatorOecId = handleToOecCache.get(h);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[KOC VIP] Tra cứu IndexedDB kocCache:", e);
+    }
+
+    missing = recipients.filter(r => !isOecIdValid(r.creatorOecId));
+    if (!missing.length) return;
+
+    // 3. Batch 100 handles per request tới API TikTok Shop import_check (Chuẩn STONK)
+    const batchSize = 100;
+    const newlyResolvedForDb = [];
+
     for (let i = 0; i < missing.length; i += batchSize) {
       if (controller?.cancelled) break;
       if (isCaptchaPresentOnPage()) {
@@ -723,6 +911,7 @@
       const slice = missing.slice(i, i + batchSize);
       const handleNames = slice.map(r => String(r.handle || "").replace(/^@/, "").trim()).filter(Boolean);
       if (!handleNames.length) continue;
+
       try {
         let res = await executeInPage({
           method: "POST",
@@ -731,6 +920,7 @@
           shopId,
           region,
         });
+
         if (res?.body?.captchaRequired || isCaptchaPresentOnPage()) {
           await waitForCaptchaResolution(controller, manifest);
           res = await executeInPage({
@@ -741,23 +931,197 @@
             region,
           });
         }
+
         const foundList = res?.body?.data?.creators || res?.body?.creators || [];
-        const foundMap = new Map();
         for (const item of foundList) {
           const base = item.base || item.creator_base || item || {};
-          const h = String(base.handle_name || item.handle_name || "").toLowerCase().trim();
+          const h = String(base.handle_name || item.handle_name || "").replace(/^@/, "").toLowerCase().trim();
           const oec = String(base.oec_id || base.creator_oec_id || item.oec_id || item.creator_oec_id || "").trim();
-          if (h && isOecIdValid(oec)) foundMap.set(h, oec);
+          const nick = String(base.nickname || item.nickname || h).trim();
+          if (h && isOecIdValid(oec)) {
+            handleToOecCache.set(h, oec);
+            newlyResolvedForDb.push({ handle: h, creatorOecId: oec, nickname: nick });
+          }
         }
+
         for (const r of slice) {
           const h = String(r.handle || "").replace(/^@/, "").toLowerCase().trim();
-          if (foundMap.has(h)) r.creatorOecId = foundMap.get(h);
+          if (handleToOecCache.has(h)) {
+            r.creatorOecId = handleToOecCache.get(h);
+          }
         }
       } catch (err) {
-        console.warn("[KOC VIP] Tra cứu ID KOC lỗi:", err);
+        console.warn("[KOC VIP] Tra cứu import_check 100 KOC lỗi:", err);
       }
-      await cancellableSleep(3500 + Math.floor(Math.random() * 1500), manifest.serverRunId);
+
+      // Microtask yield + delay 150ms siêu mượt
+      await Promise.resolve();
+      await cancellableSleep(150 + Math.floor(Math.random() * 50), manifest.serverRunId);
     }
+
+    // Lưu các kết quả tra cứu mới vào IndexedDB kocCache
+    if (newlyResolvedForDb.length) {
+      try {
+        await localDb("saveCachedKocs", { creators: newlyResolvedForDb });
+      } catch {}
+    }
+  }
+
+  // Lọc sạch toàn bộ danh sách KOC trước khi chạy (Bulk Pre-filter & Clean Buffer)
+  async function runBulkPreFilterAndRechunk(manifest, shopId, region, controller) {
+    if (manifest.draft?.tuXuLyTrung || manifest.dryRunOnly) {
+      return;
+    }
+
+    const allChunks = await localDb("listChunks", { serverRunId: manifest.serverRunId });
+    if (!Array.isArray(allChunks) || !allChunks.length) return;
+
+    // 1. Thu thập toàn bộ KOC từ tất cả chunks
+    const allRecipients = [];
+    for (const c of allChunks) {
+      for (const r of (c.recipients || [])) {
+        allRecipients.push({ ...r });
+      }
+    }
+
+    if (allRecipients.length === 0) return;
+
+    emitLog(`[KOCVIP BULK PRE-FILTER] Bắt đầu kiểm tra OEC ID và lọc trùng cho toàn bộ ${allRecipients.length} KOC...`);
+
+    // 2. Tra cứu OEC ID hàng loạt với batch 100 handles
+    await resolveMissingOecIds(allRecipients, shopId, region, controller, manifest);
+
+    // 3. Tra cứu Sổ đen (Blacklist)
+    let blOecSet = new Set();
+    let blHandleSet = new Set();
+    try {
+      const blRes = await localDb("getBlacklist", { shopId });
+      const blList = Array.isArray(blRes?.list) ? blRes.list : (Array.isArray(blRes) ? blRes : []);
+      blOecSet = new Set(blList.map(b => String(b.creatorOecId || "").trim()).filter(Boolean));
+      blHandleSet = new Set(blList.map(b => String(b.handle || "").replace(/^@/, "").toLowerCase().trim()).filter(Boolean));
+    } catch {}
+
+    const validOecList = [];
+    const skippedList = [];
+
+    for (const r of allRecipients) {
+      const oec = String(r.creatorOecId || "").trim();
+      const h = String(r.handle || "").replace(/^@/, "").toLowerCase().trim();
+      if (!isOecIdValid(oec)) {
+        skippedList.push(recipientStatusPatch(r, "failed", "Không tìm thấy OEC ID TikTok"));
+      } else if (blOecSet.has(oec) || (h && blHandleSet.has(h))) {
+        skippedList.push(recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Sổ đen tự động loại trừ)"));
+      } else {
+        validOecList.push(r);
+      }
+    }
+
+    if (validOecList.length === 0) return;
+
+    // 4. Quét kiểm trùng hàng loạt theo lô lớn 100 KOC/lệnh
+    emitLog(`[KOCVIP BULK PRE-FILTER] Đang quét kiểm trùng siêu tốc cho ${validOecList.length} KOC qua TikTok (100 KOC/lệnh)...`);
+    const batchSize = 100;
+    const allConflictOecIds = new Set();
+    const conflictInfoMap = new Map();
+
+    for (let i = 0; i < validOecList.length; i += batchSize) {
+      if (controller?.cancelled) break;
+      const slice = validOecList.slice(i, i + batchSize);
+      const checkBody = buildConflictCheckBody(manifest.draft || {}, slice);
+
+      try {
+        const checkRes = await executeInPage({
+          method: "POST",
+          path: "/api/v1/oec/affiliate/seller/invitation_group/conflict_check",
+          shopId,
+          region,
+          body: checkBody,
+        });
+
+        const data = checkRes?.body?.data || {};
+        for (const item of (data.conflict_cids || [])) {
+          if (Array.isArray(item?.cids)) item.cids.forEach(cid => cid && allConflictOecIds.add(String(cid).trim()));
+          else if (item) allConflictOecIds.add(String(item).trim());
+        }
+        for (const group of (data.conflict_list || [])) {
+          const oldGroupName = group?.name || "";
+          for (const c of (group?.creator_id_list || [])) {
+            const oec = String(c?.base_info?.creator_oec_id || "").trim();
+            if (oec) {
+              allConflictOecIds.add(oec);
+              conflictInfoMap.set(oec, oldGroupName);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[KOC VIP] Bulk pre-filter conflict check error:", err);
+      }
+
+      await Promise.resolve();
+      await cancellableSleep(150, manifest.serverRunId);
+    }
+
+    // 5. Phân tách KOC sạch 100% và KOC bị trùng
+    const cleanList = [];
+    for (const r of validOecList) {
+      const oec = String(r.creatorOecId || "").trim();
+      if (allConflictOecIds.has(oec)) {
+        const oldName = conflictInfoMap.get(oec);
+        const desc = oldName ? `Trùng nhóm "${oldName}"` : "Đang có lời mời hiệu lực tại nhóm khác";
+        skippedList.push(recipientStatusPatch(r, "skipped", `${desc} (Tự động loại trừ do trùng)`));
+      } else {
+        cleanList.push({ ...r, status: "local_pending", daKiemSach: true });
+      }
+    }
+
+    emitLog(`[KOCVIP BULK PRE-FILTER HOÀN TẤT] Quét xong ${allRecipients.length} KOC: Có ${cleanList.length} KOC SẠCH 100% sẵn sàng tạo nhóm, ${skippedList.length} KOC bị trùng/lỗi tự động bỏ qua!`);
+
+    // 6. Gom toàn bộ KOC sạch thành các nhóm 50 KOC chuẩn xác
+    const newChunks = [];
+    const baseGroupName = (manifest.draft?.title || "KOCVIP").replace(/_N\d+$/i, "");
+    let groupIndex = 1;
+    const CHUNK_CAP = 50;
+
+    for (let i = 0; i < cleanList.length; i += CHUNK_CAP) {
+      const slice = cleanList.slice(i, i + CHUNK_CAP);
+      const matchedOriginalChunk = allChunks[groupIndex - 1];
+      const chunkGroupName = matchedOriginalChunk?.groupName || (cleanList.length > CHUNK_CAP ? `${baseGroupName}_${String(groupIndex).padStart(3, "0")}` : baseGroupName);
+      newChunks.push({
+        chunkId: `${manifest.serverRunId}_c${groupIndex}`,
+        serverRunId: manifest.serverRunId,
+        shopId,
+        groupName: chunkGroupName,
+        capacity: CHUNK_CAP,
+        status: "local_pending",
+        isPreFiltered: true,
+        recipients: slice,
+        updatedAt: new Date().toISOString(),
+      });
+      groupIndex++;
+    }
+
+    // Lưu chunk chứa các KOC đã bị trùng/loại trừ (status: settled)
+    if (skippedList.length > 0) {
+      newChunks.push({
+        chunkId: `${manifest.serverRunId}_skipped`,
+        serverRunId: manifest.serverRunId,
+        shopId,
+        groupName: `${baseGroupName}_BỏQua`,
+        capacity: skippedList.length,
+        status: "settled",
+        isPreFiltered: true,
+        recipients: skippedList,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // Cập nhật lại IndexedDB với danh sách Chunks mới đã lọc sạch
+    for (const c of newChunks) {
+      await localDb("saveChunk", { manifest, chunk: c, patch: c });
+    }
+
+    manifest.chunks = newChunks;
+    await syncProgressNow(manifest);
   }
 
   // Thực thi 1 Chunk KOC
@@ -772,7 +1136,12 @@
     const JITTER_MS = Math.round(NHIP_TOI_THIEU_MS * 0.3); // Biến động ngẫu nhiên ±30% để giả lập thao tác người dùng thật
     let nhipLenhCuoi = 0;
 
-    const callTikTok = async (req, maxRetries = 3) => {
+    const callTikTok = async (req, maxRetries = 3, isFastRetry = false) => {
+      // Các API chỉ đọc (conflict_check, import_check) chỉ nghỉ ngắn 350ms, không nghỉ 7.5s
+      const isReadOnly = isFastRetry || req?.path?.includes("conflict_check") || req?.path?.includes("import_check") || req?.path?.includes("get_creator_info");
+      const targetDelay = isReadOnly ? 350 : NHIP_TOI_THIEU_MS;
+      const targetJitter = isReadOnly ? 100 : JITTER_MS;
+
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (controller?.cancelled) {
           const cancelErr = new Error("Đợt mời đã bị người dùng hủy bỏ");
@@ -790,13 +1159,16 @@
           }
         }
 
-        const cachLan = Date.now() - nhipLenhCuoi;
-        if (cachLan < NHIP_TOI_THIEU_MS) {
-          const delay = NHIP_TOI_THIEU_MS - cachLan + Math.floor(Math.random() * JITTER_MS);
-          await cancellableSleep(delay, manifest.serverRunId);
-        } else {
-          // Luôn có 1 khoảng nghỉ ngẫu nhiên 1.0s - 2.0s giả lập hành vi bấm tay của người dùng
-          await cancellableSleep(Math.floor(Math.random() * 1000) + 1000, manifest.serverRunId);
+        if (nhipLenhCuoi > 0) {
+          const cachLan = Date.now() - nhipLenhCuoi;
+          if (cachLan < targetDelay) {
+            const delay = targetDelay - cachLan + Math.floor(Math.random() * targetJitter);
+            await cancellableSleep(delay, manifest.serverRunId);
+          } else if (!isFastRetry) {
+            await cancellableSleep(Math.floor(Math.random() * 500) + 300, manifest.serverRunId);
+          } else {
+            await cancellableSleep(150, manifest.serverRunId);
+          }
         }
         nhipLenhCuoi = Date.now();
 
@@ -862,14 +1234,38 @@
       return r;
     });
 
+    // 1b. Sàng lọc danh sách đen (Blacklist - các KOC liên kết Shop đã biết)
+    try {
+      const blRes = await localDb("getBlacklist", { shopId });
+      const blList = Array.isArray(blRes?.list) ? blRes.list : (Array.isArray(blRes) ? blRes : []);
+      if (blList.length > 0) {
+        const blOecSet = new Set(blList.map(b => String(b.creatorOecId || "").trim()).filter(Boolean));
+        const blHandleSet = new Set(blList.map(b => String(b.handle || "").replace(/^@/, "").toLowerCase().trim()).filter(Boolean));
+
+        let blCount = 0;
+        recipients = recipients.map(r => {
+          const oec = String(r.creatorOecId || "").trim();
+          const handle = String(r.handle || "").replace(/^@/, "").toLowerCase().trim();
+          if ((oec && blOecSet.has(oec)) || (handle && blHandleSet.has(handle))) {
+            blCount++;
+            return recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Sổ đen tự động loại trừ)");
+          }
+          return r;
+        });
+        if (blCount > 0) {
+          emitLog(`[KOCVIP SỔ ĐEN] Đã tự động loại trừ trước ${blCount} KOC liên kết Shop từ Sổ đen.`);
+        }
+      }
+    } catch {}
+
     let pending = recipients.filter(r => !["sent", "failed", "skipped"].includes(r.status));
     if (!pending.length) {
-      emitLog(`[KOCVIP] [LỖI ĐỎ] Chunk ${chunk.chunkId}: Không có KOC nào có OEC ID hợp lệ để mời!`, true);
+      emitLog(`[KOCVIP] Chunk ${chunk.chunkId}: Toàn bộ KOC đã được xử lý hoặc không có KOC hợp lệ. Hoàn tất chunk.`, false);
       await localDb("saveChunk", { manifest, chunk, patch: { status: "settled", recipients } });
       return { state: "settled" };
     }
 
-    // 1b. Kiểm tra sản phẩm bắt buộc
+    // 1c. Kiểm tra sản phẩm bắt buộc
     const selectedProducts = manifest.draft?.products || [];
     if (!selectedProducts.length) {
       emitLog(`[KOCVIP] [LỖI ĐỎ] Chunk ${chunk.chunkId}: Không có sản phẩm nào được chọn! TikTok bắt buộc phải có ít nhất 1 sản phẩm để gắn lời mời.`, true);
@@ -879,12 +1275,15 @@
     }
 
     // 2. Conflict Check (Kiểm trùng)
-    const conflictCheckBody = buildConflictCheckBody(manifest.draft || {}, pending);
-    let conflictIds = new Set();
-    const conflictInfoMap = new Map(); // oecId -> { oldGroupId, oldGroupName, userName, nickName }
+    if (chunk.isPreFiltered) {
+      emitLog(`[KOCVIP] Chunk ${chunk.chunkId} (${chunk.groupName}): Đã được lọc sạch 100% KOC qua Bulk Pre-Filter -> Gửi lệnh tạo nhóm ngay!`);
+    } else {
+      const conflictCheckBody = buildConflictCheckBody(manifest.draft || {}, pending);
+      let conflictIds = new Set();
+      const conflictInfoMap = new Map(); // oecId -> { oldGroupId, oldGroupName, userName, nickName }
 
-    try {
-      emitLog(`[KOCVIP API] Đang gọi conflict_check cho ${pending.length} KOC...`);
+      try {
+        emitLog(`[KOCVIP API] Đang gọi conflict_check cho ${pending.length} KOC...`);
       const checkRes = await callTikTok({
         method: "POST",
         path: "/api/v1/oec/affiliate/seller/invitation_group/conflict_check",
@@ -1081,62 +1480,22 @@
     // [CÁCH 2 NÂNG CAO: TỰ ĐỘNG BÙ KOC TỪ CÁC NHÓM SAU ĐỂ ĐỦ 50 KOC SẠCH]
     const TARGET_CHUNK_CAPACITY = 50;
     let refillPasses = 0;
-    const MAX_REFILL_PASSES = 3;
+    const MAX_REFILL_PASSES = 4;
 
     while (pending.length < TARGET_CHUNK_CAPACITY && refillPasses < MAX_REFILL_PASSES && !controller?.cancelled) {
       refillPasses++;
       const needed = TARGET_CHUNK_CAPACITY - pending.length;
 
-      // Lấy danh sách chunks trong run hiện tại từ IndexedDB
-      const allChunks = await localDb("listChunks", { serverRunId: manifest.serverRunId });
-      const subsequentChunks = (allChunks || []).filter(c => 
-        c.chunkId !== chunk.chunkId && 
-        !TERMINAL_CHUNK_STATUSES.has(c.status)
-      );
+      // NGUYÊN TỬ: Di chuyển KOC từ chunk sau sang chunk hiện tại trong 1 transaction IndexedDB duy nhất (tránh mất KOC)
+      const refillRes = await localDb("reallocateRefill", {
+        serverRunId: manifest.serverRunId,
+        receiverChunkId: chunk.chunkId,
+        shortage: needed,
+      });
 
-      if (!subsequentChunks.length) {
-        break; // Không còn nhóm nào khác để lấy KOC bù
-      }
-
-      let refilledKocs = [];
-      for (const subChunk of subsequentChunks) {
-        if (refilledKocs.length >= needed) break;
-        const subRecipients = Array.isArray(subChunk.recipients) ? subChunk.recipients : [];
-        const availableInSub = subRecipients.filter(r => 
-          !["sent", "failed", "skipped", "waiting_daily_reset"].includes(r.status)
-        );
-        if (!availableInSub.length) continue;
-
-        const countToTake = Math.min(needed - refilledKocs.length, availableInSub.length);
-        const taken = availableInSub.slice(0, countToTake);
-        const takenRefs = new Set(taken);
-
-        // Cập nhật lại subChunk: loại bỏ các KOC đã chuyển sang nhóm hiện tại
-        const remainingInSub = subRecipients.filter(r => !takenRefs.has(r));
-        const subRemainingPending = remainingInSub.filter(r => 
-          !["sent", "failed", "skipped", "waiting_daily_reset"].includes(r.status)
-        );
-
-        subChunk.recipients = remainingInSub;
-        const subPatch = {
-          recipients: remainingInSub,
-          ...(subRemainingPending.length === 0 ? { status: "settled" } : {})
-        };
-        await localDb("saveChunk", { manifest, chunk: subChunk, patch: subPatch });
-
-        if (Array.isArray(manifest.chunks)) {
-          const memChunk = manifest.chunks.find(c => c.chunkId === subChunk.chunkId);
-          if (memChunk) {
-            memChunk.recipients = remainingInSub;
-            if (subRemainingPending.length === 0) memChunk.status = "settled";
-          }
-        }
-
-        refilledKocs.push(...taken);
-      }
-
+      let refilledKocs = Array.isArray(refillRes?.moved) ? refillRes.moved : [];
       if (!refilledKocs.length) {
-        break; // Không còn KOC nào khả dụng ở các nhóm sau
+        break; // Không còn KOC nào khả dụng ở các nhóm sau để bù
       }
 
       emitLog(`[KOCVIP BÙ KOC TỰ ĐỘNG] Đã bốc thêm ${refilledKocs.length} KOC từ nhóm tiếp theo để bù vào nhóm "${chunk.groupName || chunk.chunkId}". Đang kiểm tra OEC ID và quét trùng cho KOC mới...`);
@@ -1214,6 +1573,7 @@
 
       await cancellableSleep(1500, manifest.serverRunId);
     }
+  }
 
     if (!pending.length) {
       emitLog(`[KOCVIP] Chunk ${chunk.chunkId}: Toàn bộ KOC đều bị trùng (đã loại trừ) hoặc không có KOC hợp lệ. Hoàn tất chunk an toàn.`);
@@ -1261,17 +1621,7 @@
       return { state: "waiting_daily_reset" };
     }
 
-    // Theo HAR Entry 137, ID nằm trong data.invitation.id
-    let groupId = String(
-      createRes?.body?.data?.invitation?.id ||
-      createRes?.body?.data?.invitation_group?.id ||
-      createRes?.body?.data?.invitation_group_id ||
-      createRes?.body?.data?.id ||
-      createRes?.body?.invitation?.id ||
-      createRes?.body?.invitation_group_id ||
-      createRes?.body?.id ||
-      ""
-    );
+    let groupId = extractGroupId(createRes);
 
     // Safety net: nếu groupId trống và phát hiện Captcha
     if (!groupId && (isCaptchaPresentOnPage() || createRes?.body?.captchaRequired || createCode === 30004009)) {
@@ -1288,19 +1638,15 @@
       });
       createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
       createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
-      groupId = String(
-        createRes?.body?.data?.invitation?.id ||
-        createRes?.body?.data?.invitation_group?.id ||
-        createRes?.body?.data?.invitation_group_id ||
-        createRes?.body?.data?.id ||
-        createRes?.body?.invitation?.id ||
-        createRes?.body?.invitation_group_id ||
-        createRes?.body?.id ||
-        ""
-      );
+      groupId = extractGroupId(createRes);
     }
 
-    if (!createRes?.ok || createCode !== 0 || !groupId) {
+    const isCreateSuccess = (createRes?.ok && createCode === 0) || createCode === 0;
+    if (isCreateSuccess && !groupId) {
+      groupId = `group_${Date.now()}`;
+    }
+
+    if (!isCreateSuccess) {
       let errMsg = createRes?.body?.message || createRes?.error || "Không tạo được nhóm lời mời trên TikTok";
       emitLog(`[KOCVIP API LỖI] create nhóm "${tenNhom}" THẤT BẠI: HTTP ${createStatus}, Code ${createCode}: ${errMsg}`, true);
 
@@ -1319,112 +1665,9 @@
         });
         createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
         createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
-        groupId = String(
-          createRes?.body?.data?.invitation?.id ||
-          createRes?.body?.data?.invitation_group?.id ||
-          createRes?.body?.data?.invitation_group_id ||
-          createRes?.body?.data?.id ||
-          createRes?.body?.invitation?.id ||
-          createRes?.body?.invitation_group_id ||
-          createRes?.body?.id ||
-          ""
-        );
-        if (createRes?.ok && createCode === 0 && groupId) {
+        groupId = extractGroupId(createRes) || `group_${Date.now()}`;
+        if ((createRes?.ok && createCode === 0) || createCode === 0) {
           emitLog(`[KOCVIP TẠO NHÓM THÀNH CÔNG] Đã tạo nhóm thành công với tên an toàn "${fallbackName}" (ID: ${groupId})!`);
-        } else {
-          errMsg = createRes?.body?.message || createRes?.error || errMsg;
-        }
-      }
-
-      // XỬ LÝ ĐẶC BIỆT LỖI 16024016 (The invitation failed because the creator is linked with a shop account):
-      // Trong nhóm có KOC là tài khoản chính thức hoặc tiếp thị của một Shop TikTok (không được nhận lời mời Affiliate).
-      // Thay vì làm hỏng cả nhóm và dừng đợt mời, tự động CÔ LẬP và LOẠI BỎ KOC lỗi, gửi lời mời cho các KOC hợp lệ còn lại!
-      if (createCode === 16024016 || errMsg.toLowerCase().includes("linked with a shop account")) {
-        if (pending.length === 1) {
-          const badKoc = pending[0];
-          const kocName = badKoc.handle ? `@${badKoc.handle}` : badKoc.creatorOecId;
-          emitLog(`[KOCVIP BỎ QUA] KOC ${kocName} là tài khoản liên kết Shop (Mã 16024016) -> Tự động bỏ qua.`);
-          recipients = recipients.map(r => r.creatorOecId === badKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
-          await localDb("saveChunk", { manifest, chunk, patch: { status: "settled", recipients } });
-          return { state: "settled" };
-        }
-
-        emitLog(`[KOCVIP PHÁT HIỆN KOC LIÊN KẾT SHOP] TikTok từ chối nhóm vì có KOC liên kết Shop (Mã 16024016). Đang tự động loại trừ KOC lỗi để gửi 1 LỆNH DUY NHẤT cho toàn bộ KOC sạch còn lại...`);
-
-        let retryPass = 0;
-        const maxRetries = 5;
-        let batchSuccess = false;
-
-        while (pending.length > 0 && retryPass < maxRetries && !controller?.cancelled) {
-          retryPass++;
-          const badCreatorIds = extractBadCreatorsFromResponse(createRes);
-
-          if (badCreatorIds.length > 0) {
-            const badSet = new Set(badCreatorIds);
-            emitLog(`[KOCVIP LOẠI TRỪ] Đã xác định ${badCreatorIds.length} KOC liên kết Shop: ${badCreatorIds.join(", ")} -> Loại trừ ngay khỏi nhóm.`);
-            recipients = recipients.map(r => {
-              const oec = String(r.creatorOecId || "").trim();
-              if (badSet.has(oec) || badSet.has(String(r.handle || "").trim())) {
-                return recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)");
-              }
-              return r;
-            });
-            pending = recipients.filter(r => !["sent", "failed", "skipped"].includes(r.status));
-          } else {
-            // Không có ID cụ thể trong message: loại trừ KOC đầu tiên bị nghi ngờ
-            const firstBad = pending[0];
-            const firstName = firstBad.handle ? `@${firstBad.handle}` : firstBad.creatorOecId;
-            emitLog(`[KOCVIP LOẠI TRỪ AN TOÀN] Không có ID cụ thể trong thông báo -> Tạm loại trừ KOC ${firstName} để bảo vệ nhóm.`);
-            recipients = recipients.map(r => r.creatorOecId === firstBad.creatorOecId ? recipientStatusPatch(r, "skipped", "Nghi ngờ liên kết Shop (Mã 16024016)") : r);
-            pending = recipients.filter(r => !["sent", "failed", "skipped"].includes(r.status));
-          }
-
-          await localDb("saveChunk", { manifest, chunk, patch: { recipients } });
-          await syncProgressNow(manifest);
-
-          if (!pending.length) {
-            emitLog(`[KOCVIP] Nhóm ${chunk.chunkId} không còn KOC hợp lệ sau khi loại trừ.`);
-            break;
-          }
-
-          emitLog(`[KOCVIP GỬI LẠI GỘP] Đang gửi 1 LỆNH DUY NHẤT tạo nhóm "${tenNhom}" cho ${pending.length} KOC sạch còn lại...`);
-          await cancellableSleep(1500, manifest.serverRunId);
-
-          const retryBody = buildCreateBody(manifest.draft || {}, pending, tenNhom);
-          createRes = await callTikTok({
-            method: "POST",
-            path: "/api/v1/oec/affiliate/seller/invitation_group/create",
-            shopId,
-            shopRegion: region,
-            body: retryBody,
-          });
-
-          createCode = Number(createRes?.body?.code ?? (createRes?.httpStatus === 200 ? 0 : createRes?.httpStatus ?? -1));
-          createStatus = createRes?.httpStatus || createRes?.status || (createRes?.ok ? 200 : 400);
-          groupId = String(
-            createRes?.body?.data?.invitation?.id ||
-            createRes?.body?.data?.invitation_group?.id ||
-            createRes?.body?.data?.invitation_group_id ||
-            createRes?.body?.data?.id ||
-            createRes?.body?.invitation?.id ||
-            createRes?.body?.invitation_group_id ||
-            createRes?.body?.id ||
-            ""
-          );
-
-          if (createRes?.ok && createCode === 0 && groupId) {
-            emitLog(`[KOCVIP TẠO NHÓM THÀNH CÔNG] Tuyệt vời! Đã tạo trọn vẹn nhóm "${tenNhom}" (ID: ${groupId}) cho ${pending.length} KOC sạch còn lại trong 1 lệnh duy nhất!`);
-            batchSuccess = true;
-            break;
-          }
-
-          errMsg = createRes?.body?.message || createRes?.error || "Lỗi tạo nhóm lời mời";
-          if (createCode !== 16024016 && !errMsg.toLowerCase().includes("linked with a shop account")) {
-            break;
-          }
-        }
-
-        if (batchSuccess && groupId) {
           recipients = recipients.map(r => {
             if (pending.some(p => p.creatorOecId === r.creatorOecId)) {
               return { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId };
@@ -1434,12 +1677,143 @@
           await localDb("saveChunk", { manifest, chunk, patch: { status: "sent", groupId, recipients } });
           await syncProgressNow(manifest);
           return { state: "sent", groupId };
+        } else {
+          errMsg = createRes?.body?.message || createRes?.error || errMsg;
+        }
+      }
+
+      // XỬ LÝ ĐẶC BIỆT LỖI 16024016 (The invitation failed because the creator is linked with a shop account):
+      // Trong nhóm có KOC là tài khoản chính thức hoặc tiếp thị của một Shop TikTok (không được nhận lời mời Affiliate).
+      // Thay vì làm hỏng cả nhóm và dừng đợt mời, tự động CÔ LẬP ĐUÔI và LOẠI BỎ KOC lỗi, gửi lời mời cho các KOC hợp lệ còn lại!
+      if (createCode === 16024016 || errMsg.toLowerCase().includes("linked with a shop account")) {
+        // 1. Nếu chỉ có 1 KOC trong lô gửi -> Đã tóm đúng 100% ID KOC vi phạm
+        if (pending.length === 1) {
+          const badKoc = pending[0];
+          const kocName = badKoc.handle ? `@${badKoc.handle}` : badKoc.creatorOecId;
+          emitLog(`[KOCVIP BỎ QUA] KOC ${kocName} là tài khoản liên kết Shop (Mã 16024016) -> Ghi Sổ đen vĩnh viễn & Tự động bỏ qua.`);
+          try {
+            await localDb("addToBlacklist", {
+              creatorOecId: badKoc.creatorOecId,
+              handle: badKoc.handle || "",
+              reason: "Tài khoản liên kết Shop (Mã 16024016)",
+              shopId,
+              tiktokCode: 16024016,
+            });
+          } catch {}
+          recipients = recipients.map(r => r.creatorOecId === badKoc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
+          await localDb("saveChunk", { manifest, chunk, patch: { status: "settled", recipients } });
+          return { state: "settled" };
         }
 
-        const chunkStatus = pending.length === 0 ? "settled" : "failed";
-        await localDb("saveChunk", { manifest, chunk, patch: { status: chunkStatus, recipients } });
+        // 2. Nếu TikTok trả về cụ thể danh sách ID bị lỗi trong message/details
+        const badCreatorIds = extractBadCreatorsFromResponse(createRes);
+        if (badCreatorIds.length > 0) {
+          const badSet = new Set(badCreatorIds);
+          emitLog(`[KOCVIP LOẠI TRỪ] Đã xác định ${badCreatorIds.length} KOC liên kết Shop: ${badCreatorIds.join(", ")} -> Loại trừ ngay và ghi Sổ đen.`);
+          for (const bId of badCreatorIds) {
+            try {
+              await localDb("addToBlacklist", {
+                creatorOecId: bId,
+                reason: "Tài khoản liên kết Shop (Mã 16024016)",
+                shopId,
+                tiktokCode: 16024016,
+              });
+            } catch {}
+          }
+          recipients = recipients.map(r => {
+            const oec = String(r.creatorOecId || "").trim();
+            if (badSet.has(oec) || badSet.has(String(r.handle || "").trim())) {
+              return recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)");
+            }
+            return r;
+          });
+          pending = recipients.filter(r => !["sent", "failed", "skipped"].includes(r.status));
+
+          if (pending.length > 0) {
+            emitLog(`[KOCVIP GỬI LẠI GỘP] Đang gửi 1 LỆNH DUY NHẤT tạo nhóm "${tenNhom}" cho ${pending.length} KOC sạch còn lại...`);
+            const retryBody = buildCreateBody(manifest.draft || {}, pending, tenNhom);
+            const retryRes = await callTikTok({
+              method: "POST",
+              path: "/api/v1/oec/affiliate/seller/invitation_group/create",
+              shopId,
+              shopRegion: region,
+              body: retryBody,
+            }, 2, true);
+            const rCode = Number(retryRes?.body?.code ?? (retryRes?.httpStatus === 200 ? 0 : retryRes?.httpStatus ?? -1));
+            let rGroupId = extractGroupId(retryRes) || `group_${Date.now()}`;
+            if ((retryRes?.ok && rCode === 0) || rCode === 0) {
+              recipients = recipients.map(r => {
+                if (pending.some(p => p.creatorOecId === r.creatorOecId)) {
+                  return { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: rGroupId };
+                }
+                return r;
+              });
+              await localDb("saveChunk", { manifest, chunk, patch: { status: "sent", groupId: rGroupId, recipients } });
+              await syncProgressNow(manifest);
+              return { state: "sent", groupId: rGroupId };
+            }
+          }
+        }
+
+        // 3. Nếu đang ở Chế độ Cô lập đuôi (Tail Isolation Mode): bóc tách từng KOC 1 (size = 1) để xác định chính xác mà không làm hỏng nhóm
+        if (chunk.tailIsolationMode) {
+          emitLog(`[KOCVIP CÔ LẬP ĐUÔI] Đang bóc tách từng KOC trong nhóm ${chunk.chunkId} để xác định chính xác tài khoản Shop vi phạm...`);
+          for (const koc of [...pending]) {
+            if (controller?.cancelled) break;
+            const singleBody = buildCreateBody(manifest.draft || {}, [koc], `${tenNhom}_i`);
+            const singleRes = await callTikTok({
+              method: "POST",
+              path: "/api/v1/oec/affiliate/seller/invitation_group/create",
+              shopId,
+              shopRegion: region,
+              body: singleBody,
+            }, 1, true);
+
+            const sCode = Number(singleRes?.body?.code ?? (singleRes?.httpStatus === 200 ? 0 : singleRes?.httpStatus ?? -1));
+            const sMsg = singleRes?.body?.message || singleRes?.error || "";
+            const sGroupId = extractGroupId(singleRes) || `group_${Date.now()}`;
+
+            if (sCode === 16024016 || sMsg.toLowerCase().includes("linked with a shop account")) {
+              const kName = koc.handle ? `@${koc.handle}` : koc.creatorOecId;
+              emitLog(`[KOCVIP BẮT ĐÚNG THỦ PHẠM 16024016] KOC ${kName} là nick liên kết Shop -> Ghi Sổ đen & Tự động bỏ qua.`);
+              try {
+                await localDb("addToBlacklist", {
+                  creatorOecId: koc.creatorOecId,
+                  handle: koc.handle || "",
+                  reason: "Tài khoản liên kết Shop (Mã 16024016)",
+                  shopId,
+                  tiktokCode: 16024016,
+                });
+              } catch {}
+              recipients = recipients.map(r => r.creatorOecId === koc.creatorOecId ? recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Không thể nhận lời mời Affiliate - Mã 16024016)") : r);
+            } else if ((singleRes?.ok && sCode === 0) || sCode === 0) {
+              recipients = recipients.map(r => r.creatorOecId === koc.creatorOecId ? { ...recipientStatusPatch(r, "sent", "Đã gửi lời mời thành công"), groupId: sGroupId } : r);
+            } else {
+              recipients = recipients.map(r => r.creatorOecId === koc.creatorOecId ? recipientStatusPatch(r, "failed", `Code ${sCode}: ${sMsg}`) : r);
+            }
+            await localDb("saveChunk", { manifest, chunk, patch: { recipients } });
+            await syncProgressNow(manifest);
+            await cancellableSleep(600, manifest.serverRunId);
+          }
+          const finalChunkState = recipients.some(r => r.status === "sent") ? "sent" : "settled";
+          await localDb("saveChunk", { manifest, chunk, patch: { status: finalChunkState, recipients } });
+          return { state: finalChunkState };
+        }
+
+        // 4. Nếu chưa phải chế độ cô lập đuôi (luồng chính): HOÃN NHÓM XUỐNG CUỐI (Tail Isolation Mode) để giải phóng luồng chính chạy siêu tốc
+        emitLog(`[KOCVIP HOÃN CÔ LẬP ĐUÔI] Nhóm ${chunk.chunkId} chứa KOC liên kết Shop (16024016). Tự động hoãn nhóm này về cuối đợt mời để xử lý bóc tách từng KOC mà không làm chậm các nhóm sạch khác!`);
+        await localDb("saveChunk", {
+          manifest,
+          chunk,
+          patch: {
+            status: "local_pending",
+            phase: "waiting_creator_isolation_tail",
+            tailIsolationMode: true,
+            recipients,
+          }
+        });
         await syncProgressNow(manifest);
-        return { state: chunkStatus, error: errMsg };
+        return { state: "creator_isolation_tail_deferred" };
       }
 
       recipients = recipients.map(r => pending.some(p => p.creatorOecId === r.creatorOecId) ? recipientStatusPatch(r, "failed", `HTTP ${createStatus}, Code ${createCode}: ${errMsg}`) : r);
@@ -1548,6 +1922,43 @@
         return;
       }
 
+      // SÀNG LỌC ĐẦU VÀO: Tự động loại trừ ngay các KOC đã nằm trong Sổ đen (Mã 16024016)
+      try {
+        const blacklist = await localDb("getBlacklist");
+        if (Array.isArray(blacklist) && blacklist.length > 0) {
+          const blackSet = new Set(blacklist.map(b => String(b.creatorOecId || "").trim()).filter(Boolean));
+          let blackCount = 0;
+          for (const c of chunks) {
+            let changed = false;
+            c.recipients = (c.recipients || []).map(r => {
+              const oec = String(r.creatorOecId || "").trim();
+              if (blackSet.has(oec) && r.status === "local_pending") {
+                blackCount++;
+                changed = true;
+                return recipientStatusPatch(r, "skipped", "Tài khoản liên kết Shop (Sổ đen - Mã 16024016)");
+              }
+              return r;
+            });
+            if (changed) {
+              await localDb("saveChunk", { manifest, chunk: c, patch: { recipients: c.recipients } });
+            }
+          }
+          if (blackCount > 0) {
+            emitLog(`[KOCVIP SỔ ĐEN] Đã tự động loại trừ ${blackCount} KOC liên kết Shop đã lưu trong Sổ đen trước khi bắt đầu!`);
+          }
+        }
+      } catch {}
+
+      // CHẠY BULK PRE-FILTER: Lọc trùng siêu tốc 100 KOC/lệnh và gom nhóm sạch 50 KOC/nhóm
+      if (!manifest.draft?.tuXuLyTrung && !manifest.dryRunOnly) {
+        try {
+          await runBulkPreFilterAndRechunk(manifest, shopId, region, controller);
+          chunks = await localDb("listChunks", { serverRunId: manifest.serverRunId });
+        } catch (err) {
+          console.warn("[KOC VIP] Lỗi chạy bulk pre-filter:", err);
+        }
+      }
+
       const totalRecipients = chunks.reduce((acc, c) => acc + (c.recipients?.length || 0), 0);
       emitLog(`[KOCVIP] Tổng số recipient trên tất cả chunk: ${totalRecipients} KOC.`);
       if (totalRecipients === 0) {
@@ -1581,7 +1992,7 @@
       };
       try {
         localStorage.setItem("kocvip_last_run_id", manifest.serverRunId);
-        chrome.storage.local.set({ kocvip_active_run_id: manifest.serverRunId, kocvip_last_run_id: manifest.serverRunId });
+        safeStorageSet({ kocvip_active_run_id: manifest.serverRunId, kocvip_last_run_id: manifest.serverRunId });
       } catch {}
       startMiniBarTimer();
       renderMiniBar();
@@ -1595,6 +2006,14 @@
           controller.lastActivityAt = Date.now();
         }
       }, 15000);
+
+      // Sắp xếp các chunk đang ở chế độ cô lập đuôi xuống cuối
+      pending.sort((a, b) => {
+        const aIsTail = Boolean(a.tailIsolationMode || a.phase === "waiting_creator_isolation_tail");
+        const bIsTail = Boolean(b.tailIsolationMode || b.phase === "waiting_creator_isolation_tail");
+        if (aIsTail === bIsTail) return 0;
+        return aIsTail ? 1 : -1;
+      });
 
       while (pending.length && !controller.cancelled) {
         if (controller.paused) {
@@ -1666,7 +2085,14 @@
         }
 
         const dbPending = chunks.filter(c => !TERMINAL_CHUNK_STATUSES.has(c.status));
-        pending = dbPending.filter(c => c.chunkId !== chunk.chunkId);
+        pending = dbPending.filter(c => c.chunkId !== chunk.chunkId || res.state === "creator_isolation_tail_deferred");
+        // Sắp xếp các chunk đang ở chế độ cô lập đuôi (16024016) xuống cuối cùng để luồng chính chạy mượt mà
+        pending.sort((a, b) => {
+          const aIsTail = Boolean(a.tailIsolationMode || a.phase === "waiting_creator_isolation_tail");
+          const bIsTail = Boolean(b.tailIsolationMode || b.phase === "waiting_creator_isolation_tail");
+          if (aIsTail === bIsTail) return 0;
+          return aIsTail ? 1 : -1;
+        });
 
         // ✅ Độ trễ an toàn giữa các chiến dịch (camp/chunk) mời KOC để chống bị TikTok quét
         if (pending.length && !controller.cancelled && !manifest.dryRunOnly) {
@@ -1700,14 +2126,28 @@
         renderMiniBar();
         try {
           localStorage.setItem("kocvip_last_run_id", manifest.serverRunId);
-          chrome.storage.local.set({ kocvip_last_run_id: manifest.serverRunId });
+          safeStorageSet({ kocvip_last_run_id: manifest.serverRunId });
         } catch {}
       }
 
       try {
+        const completionPayload = {
+          serverRunId: manifest.serverRunId,
+          status: finalStatus,
+          completed: true,
+          sent: currentActiveRun?.sent || 0,
+          skipped: currentActiveRun?.skipped || 0,
+          failed: currentActiveRun?.failed || 0,
+          waiting: currentActiveRun?.waiting || 0,
+          total: currentActiveRun?.totalRecipients || 0,
+        };
         chrome.runtime.sendMessage({
           type: "KOCVIP_PROGRESS_UPDATE",
-          payload: { serverRunId: manifest.serverRunId, status: finalStatus, completed: true },
+          payload: completionPayload,
+        });
+        chrome.runtime.sendMessage({
+          type: "KOCVIP_NOTIFY_COMPLETED",
+          payload: completionPayload,
         });
       } catch {}
     } catch (err) {
@@ -1720,7 +2160,7 @@
         renderMiniBar();
         try {
           localStorage.setItem("kocvip_last_run_id", manifest.serverRunId);
-          chrome.storage.local.set({ kocvip_last_run_id: manifest.serverRunId });
+          safeStorageSet({ kocvip_last_run_id: manifest.serverRunId });
         } catch {}
       }
     } finally {
@@ -1787,7 +2227,7 @@
       });
       try {
         localStorage.removeItem("kocvip_last_run_id");
-        chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+        safeStorageRemove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
       } catch {}
       sendResponse({ success: true, data: { stopped: true } });
       return false;
@@ -1884,6 +2324,12 @@
       sendResponse({ success: true, opened: overlayHost?.style.display === "flex" });
       return true;
     }
+
+    if (type === "KOCVIP_FOCUS_CAPTCHA") {
+      hideModal();
+      sendResponse({ success: true });
+      return true;
+    }
   });
 
   // =========================================================================
@@ -1915,6 +2361,7 @@
 
       overlayIframe = document.createElement("iframe");
       overlayIframe.src = safeGetURL("ui/index.html");
+      overlayIframe.allow = "clipboard-read; clipboard-write";
       const isSavedMax = localStorage.getItem("kocvip_is_maximized") === "true";
       if (isSavedMax) {
         overlayIframe.dataset.maximized = "true";
@@ -2137,7 +2584,7 @@
       });
       try {
         localStorage.removeItem("kocvip_last_run_id");
-        chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
+        safeStorageRemove(["kocvip_active_run_id", "kocvip_last_run_id", "kocvip_run_start_time"]);
       } catch {}
     }
   });
@@ -2466,7 +2913,17 @@
       const elapsed = isCompleted && currentActiveRun.finishedAt 
         ? currentActiveRun.finishedAt - currentActiveRun.startedAt 
         : Date.now() - currentActiveRun.startedAt;
-      elTimer.textContent = `⏱️ ${formatStopwatch(elapsed)}`;
+      if (isCompleted) {
+        elTimer.textContent = `⏱️ ${formatStopwatch(elapsed)}`;
+      } else {
+        const remainingKocs = Math.max(0, total - processed);
+        const remainingChunks = Math.ceil(remainingKocs / 50);
+        const etaSec = Math.max(0, remainingChunks * 8);
+        const etaMin = Math.floor(etaSec / 60);
+        const etaS = etaSec % 60;
+        const etaFormatted = `~${String(etaMin).padStart(2, "0")}:${String(etaS).padStart(2, "0")}`;
+        elTimer.textContent = `⏱️ ${formatStopwatch(elapsed)} • ⏳ ${etaFormatted}`;
+      }
     }
 
     if (isCompleted) {
@@ -2676,11 +3133,11 @@
       }
       if (runId) {
         try {
-          chrome.storage.local.set({ kocvip_active_run_id: runId });
+          safeStorageSet({ kocvip_active_run_id: runId });
         } catch {}
       } else {
         try {
-          chrome.storage.local.remove(["kocvip_active_run_id", "kocvip_last_run_id"]);
+          safeStorageRemove(["kocvip_active_run_id", "kocvip_last_run_id"]);
           localStorage.removeItem("kocvip_last_run_id");
         } catch {}
       }

@@ -3,7 +3,7 @@
  * Lưu trữ trạng thái đợt mời, chunks và danh mục sản phẩm hoàn toàn cục bộ trên máy.
  */
 const DB_NAME = "koc-vip-local-invite";
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -50,6 +50,17 @@ export function openLocalInviteDb() {
         const store = db.createObjectStore("catalogProducts", { keyPath: "cacheKey" });
         store.createIndex("shopId", "shopId", { unique: false });
         store.createIndex("productId", "productId", { unique: false });
+        store.createIndex("updatedAt", "updatedAt", { unique: false });
+      }
+      if (!db.objectStoreNames.contains("blacklist")) {
+        const store = db.createObjectStore("blacklist", { keyPath: "creatorOecId" });
+        store.createIndex("shopId", "shopId", { unique: false });
+        store.createIndex("reason", "reason", { unique: false });
+        store.createIndex("updatedAt", "updatedAt", { unique: false });
+      }
+      if (!db.objectStoreNames.contains("kocCache")) {
+        const store = db.createObjectStore("kocCache", { keyPath: "handle" });
+        store.createIndex("creatorOecId", "creatorOecId", { unique: false });
         store.createIndex("updatedAt", "updatedAt", { unique: false });
       }
     };
@@ -422,6 +433,115 @@ export async function deleteRun(serverRunId) {
   return true;
 }
 
+// Chuyển KOC bù từ chunk donor sang chunk receiver trong 1 transaction IndexedDB duy nhất (Nguyên tử - Atomic)
+export async function reallocateRefill({ serverRunId, receiverChunkId, shortage = 0 } = {}) {
+  const want = Math.max(0, Number(shortage) || 0);
+  if (!want || !receiverChunkId) return { moved: [] };
+  const TERMINAL = new Set(["sent", "skipped", "failed", "waiting_daily_reset", "cancelled", "settled"]);
+  const now = new Date().toISOString();
+  const db = await openLocalInviteDb();
+  const tx = db.transaction("chunks", "readwrite");
+  const store = tx.objectStore("chunks");
+  const receiver = await requestResult(store.get(receiverChunkId));
+  if (!receiver) { await transactionDone(tx); return { moved: [] }; }
+  const all = (await requestResult(store.index("serverRunId").getAll(serverRunId)))
+    .sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
+  const moved = [];
+  for (const donor of all) {
+    if (moved.length >= want) break;
+    if (String(donor.chunkId) === String(receiverChunkId)) continue;
+    if (TERMINAL.has(String(donor.status || "")) || donor.groupId) continue;
+    const claimable = (donor.recipients || []).filter(item =>
+      !["sent", "failed"].includes(item.status) && !String(item.status || "").startsWith("skipped"));
+    const take = claimable.slice(0, want - moved.length);
+    if (!take.length) continue;
+    const takeIds = new Set(take.map(item => item.recipientId || item.creatorOecId));
+    const remaining = (donor.recipients || []).filter(item => !takeIds.has(item.recipientId || item.creatorOecId));
+    store.put({
+      ...donor,
+      recipients: remaining,
+      size: remaining.length,
+      status: remaining.length ? "local_pending" : "settled",
+      reallocatedCount: Number(donor.reallocatedCount || 0) + take.length,
+      updatedAt: now,
+    });
+    for (const item of take) {
+      moved.push({ ...item, status: "local_pending", reason: "Bổ sung để đủ 50 KOC sạch", groupId: "", updatedAt: now });
+    }
+  }
+  if (moved.length) {
+    store.put({
+      ...receiver,
+      recipients: [...(receiver.recipients || []), ...moved],
+      refillClaimed: Number(receiver.refillClaimed || 0) + moved.length,
+      updatedAt: now,
+    });
+  }
+  await transactionDone(tx);
+  return { moved };
+}
+
+// Ghi nhận KOC vi phạm vào Sổ đen (Blacklist vĩnh viễn với mã 16024016)
+export async function addToBlacklist({ creatorOecId, handle = "", reason = "", shopId = "", tiktokCode = 16024016 } = {}) {
+  if (!creatorOecId) return false;
+  const db = await openLocalInviteDb();
+  const tx = db.transaction("blacklist", "readwrite");
+  tx.objectStore("blacklist").put({
+    creatorOecId: String(creatorOecId).trim(),
+    handle: String(handle || "").trim(),
+    reason: String(reason || "").trim(),
+    shopId: String(shopId || "").trim(),
+    tiktokCode: Number(tiktokCode || 16024016),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  await transactionDone(tx);
+  return true;
+}
+
+// Lưu bộ nhớ tạm KOC đã tra cứu OEC ID
+export async function saveCachedKocs({ creators = [] } = {}) {
+  if (!Array.isArray(creators) || !creators.length) return false;
+  const db = await openLocalInviteDb();
+  const tx = db.transaction("kocCache", "readwrite");
+  const store = tx.objectStore("kocCache");
+  const now = new Date().toISOString();
+
+  for (const c of creators) {
+    const handle = String(c.handle || "").replace(/^@/, "").toLowerCase().trim();
+    const creatorOecId = String(c.creatorOecId || "").trim();
+    if (handle && creatorOecId) {
+      store.put({
+        handle,
+        creatorOecId,
+        nickname: String(c.nickname || c.nickName || handle).trim(),
+        updatedAt: now,
+      });
+    }
+  }
+  await transactionDone(tx);
+  return true;
+}
+
+// Lấy danh sách KOC từ bộ nhớ tạm theo handles
+export async function getCachedKocs({ handles = [] } = {}) {
+  if (!Array.isArray(handles) || !handles.length) return [];
+  const db = await openLocalInviteDb();
+  const tx = db.transaction("kocCache", "readonly");
+  const store = tx.objectStore("kocCache");
+  const results = [];
+
+  for (const rawH of handles) {
+    const handle = String(rawH || "").replace(/^@/, "").toLowerCase().trim();
+    if (handle) {
+      const hit = await requestResult(store.get(handle));
+      if (hit && hit.creatorOecId) results.push(hit);
+    }
+  }
+  await transactionDone(tx);
+  return results;
+}
+
 // Router tiếp nhận yêu cầu thao tác DB từ Content Script hoặc Side Panel
 export async function handleLocalInviteDbOperation(payload = {}) {
   const { op } = payload;
@@ -444,6 +564,16 @@ export async function handleLocalInviteDbOperation(payload = {}) {
       return cancelRun(payload.serverRunId);
     case "deleteRun":
       return deleteRun(payload.serverRunId);
+    case "reallocateRefill":
+      return reallocateRefill(payload);
+    case "addToBlacklist":
+      return addToBlacklist(payload);
+    case "getBlacklist":
+      return getBlacklist();
+    case "saveCachedKocs":
+      return saveCachedKocs(payload);
+    case "getCachedKocs":
+      return getCachedKocs(payload);
     case "acquireLock":
       return acquireLock(payload);
     case "releaseLock":
@@ -460,4 +590,5 @@ export async function handleLocalInviteDbOperation(payload = {}) {
       throw new Error(`Unsupported DB op: ${op}`);
   }
 }
+
 

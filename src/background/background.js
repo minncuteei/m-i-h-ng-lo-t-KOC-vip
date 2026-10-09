@@ -193,11 +193,21 @@ async function resolveAffiliateTabId(sender, shopId = "", region = "VN") {
 
 // Quản lý thông báo Desktop hệ thống khi TikTok yêu cầu giải Captcha
 let activeCaptchaNotificationId = null;
+let lastCaptchaNotificationTime = 0;
 
 function showCaptchaDesktopNotification(msg) {
+  const now = Date.now();
+  // Chống spam: Tối đa 1 thông báo Captcha trong vòng 15 giây
+  if (now - lastCaptchaNotificationTime < 15000 && activeCaptchaNotificationId) {
+    return;
+  }
+  lastCaptchaNotificationTime = now;
+
+  clearCaptchaDesktopNotification(); // Xóa thông báo cũ ngay để không bị xếp chồng nhiều dòng trên Mac
+
   const notifId = "kocvip_captcha_" + Date.now();
   activeCaptchaNotificationId = notifId;
-  const messageText = msg || "TikTok đang yêu cầu giải Captcha trên màn hình. Hãy bấm vào đây để mở tab TikTok và giải ngay!";
+  const messageText = msg || "TikTok đang yêu cầu giải Captcha trên màn hình. Bấm vào đây để nhảy ngay tới chỗ Captcha và giải!";
 
   try {
     chrome.notifications.create(notifId, {
@@ -222,9 +232,63 @@ function clearCaptchaDesktopNotification() {
   }
 }
 
-// Bấm vào thông báo Desktop thì tự động focus chuyển sang tab TikTok
+const notifiedRunsMap = new Map();
+function showCompletionDesktopNotification(payload = {}) {
+  const sent = Number(payload.sent || 0);
+  const skipped = Number(payload.skipped || 0);
+  const failed = Number(payload.failed || 0);
+  const processed = sent + skipped + failed;
+  const total = Number(payload.total || (sent + skipped + failed));
+  const isCancelled = payload.status === "cancelled";
+
+  // Tuyệt đối chỉ gửi thông báo máy tính khi đã xong 100% KOC (processed >= total và total > 0) hoặc người dùng hủy
+  if (!isCancelled && (total <= 0 || processed < total)) {
+    return;
+  }
+
+  const runId = String(payload.serverRunId || "completed");
+  const lastTime = notifiedRunsMap.get(runId) || 0;
+  if (Date.now() - lastTime < 15000) {
+    return;
+  }
+  notifiedRunsMap.set(runId, Date.now());
+
+  const notifId = "kocvip_complete_" + Date.now();
+  const title = isCancelled ? "🛑 Đợt mời đã bị dừng!" : `🎉 Đã hoàn tất đợt mời KOC (${processed}/${total})`;
+  const messageText = isCancelled
+    ? `Đợt mời đã dừng. Đã mời: ${sent} • Bỏ qua/trùng: ${skipped} • Lỗi: ${failed}`
+    : `Đã xử lý xong toàn bộ ${total} KOC:\n✅ Thành công: ${sent} | ⏭️ Bỏ qua/trùng: ${skipped} | ❌ Lỗi: ${failed}`;
+
+  try {
+    chrome.notifications.create(notifId, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title,
+      message: messageText,
+      priority: 2,
+      requireInteraction: true
+    });
+  } catch (err) {
+    console.warn("[KOC VIP] Lỗi gửi thông báo hoàn thành:", err);
+  }
+}
+
+// Bấm vào thông báo Desktop thì tự động focus tab và nhảy thẳng tới vị trí Captcha
 chrome.notifications.onClicked.addListener(async (notifId) => {
   if (notifId && notifId.startsWith("kocvip_captcha_")) {
+    try {
+      clearCaptchaDesktopNotification();
+      const tab = await findTikTokTab();
+      if (tab?.id) {
+        await chrome.tabs.update(tab.id, { active: true });
+        if (tab.windowId) {
+          await chrome.windows.update(tab.windowId, { focused: true, drawAttention: true });
+        }
+        // Gửi lệnh cho Content Script cuộn màn hình và làm nổi bật khung Captcha
+        chrome.tabs.sendMessage(tab.id, { type: "KOCVIP_FOCUS_CAPTCHA" }).catch(() => {});
+      }
+    } catch {}
+  } else if (notifId && notifId.startsWith("kocvip_complete_")) {
     try {
       const tab = await findTikTokTab();
       if (tab?.id) {
@@ -247,12 +311,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  // Gửi thông báo Desktop khi hoàn thành đợt mời (Toàn bộ RUN)
+  if (type === "KOCVIP_NOTIFY_COMPLETED") {
+    clearCaptchaDesktopNotification();
+    showCompletionDesktopNotification(payload);
+    sendResponse({ success: true });
+    return true;
+  }
+
   // Tự động quản lý thông báo Desktop qua tiến trình
   if (type === "KOCVIP_PROGRESS_UPDATE") {
     if (payload?.status === "waiting_captcha") {
       showCaptchaDesktopNotification(payload?.message);
-    } else if (payload?.status === "captcha_resolved" || payload?.status === "running" || payload?.completed) {
+    } else if (payload?.status === "captcha_resolved" || payload?.status === "running") {
       clearCaptchaDesktopNotification();
+    } else if (payload?.completed === true || payload?.status === "completed" || payload?.status === "cancelled") {
+      // TUYỆT ĐỐI CHỈ BẮN KHI TOÀN BỘ ĐỢT MỜI ĐÃ XONG (completed / cancelled), KHÔNG BẮN CHO TỪNG CHUNK CON
+      clearCaptchaDesktopNotification();
+      showCompletionDesktopNotification(payload);
     }
   }
 
@@ -315,6 +391,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ success: true, data: { id: tab.id, url: tab.url, title: tab.title, shopId, shopRegion, shopName } });
       })
       .catch(err => sendResponse({ success: false, error: String(err?.message || err) }));
+    return true;
+  }
+
+  // 2.5. Quét số thứ tự (STT) lớn nhất của các nhóm lời mời hiện có trên TikTok Shop
+  if (type === "KOCVIP_SCAN_MAX_GROUP_SEQ") {
+    (async () => {
+      try {
+        const targetTabId = await resolveTikTokTabId(_sender);
+        if (!targetTabId) {
+          sendResponse({ success: false, maxSeq: 0, error: "Chưa mở tab TikTok Affiliate" });
+          return;
+        }
+        const resp = await chrome.tabs.sendMessage(targetTabId, {
+          type: "KOCVIP_SCAN_MAX_GROUP_SEQ",
+          payload: message.payload,
+        }).catch(() => null);
+        sendResponse(resp || { success: false, maxSeq: 0 });
+      } catch (err) {
+        sendResponse({ success: false, maxSeq: 0, error: String(err?.message || err) });
+      }
+    })();
     return true;
   }
 
