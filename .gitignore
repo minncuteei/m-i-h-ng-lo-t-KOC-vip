@@ -1,0 +1,19 @@
+# Captcha service (chạy offline độc lập, không đưa lên git)
+captcha-service/
+captcha-service/*
+
+# Python cache & logs
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+*.pid
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

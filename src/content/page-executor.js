@@ -17,6 +17,7 @@
 
   // Danh mục các endpoint TikTok được phép thực thi
   const ALLOWED = new Map([
+    ["/api/v1/affiliate/account/all_sellers/get", "GET"],
     ["/api/v1/affiliate/account/info_v2", "GET"],
     ["/api/v1/affiliate/backend/category/get", "GET"],
     ["/api/v1/affiliate/product_selection/list", "POST"],

@@ -44,8 +44,7 @@
         "https://affiliate.tiktokglobalshop.com/*",
         "https://affiliate.tiktokshopglobalselling.com/*",
         "https://seller-vn.tiktok.com/*",
-        "https://seller.tiktok.com/*",
-        "https://*.tiktok.com/*"
+        "https://seller.tiktok.com/*"
       ]
     }
   ],
@@ -55,8 +54,7 @@
     "https://affiliate.tiktokglobalshop.com/*",
     "https://affiliate.tiktokshopglobalselling.com/*",
     "https://seller-vn.tiktok.com/*",
-    "https://seller.tiktok.com/*",
-    "https://*.tiktok.com/*"
+    "https://seller.tiktok.com/*"
   ],
   "content_scripts": [
     {

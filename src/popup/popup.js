@@ -23,17 +23,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       if (activeTikTokTab) {
         statusDot.className = "status-dot connected";
-        statusTitle.textContent = "Đã kết nối TikTok Shop";
         
-        let shopInfo = "affiliate.tiktok.com";
+        let shopName = "";
+        let shopId = "";
         try {
           const urlObj = new URL(activeTikTokTab.url);
-          const shopId = urlObj.searchParams.get("shop_id") || urlObj.searchParams.get("oec_seller_id");
-          if (shopId) {
-            shopInfo = `Shop ID: ${shopId}`;
-          }
+          shopId = urlObj.searchParams.get("shop_id") || urlObj.searchParams.get("oec_seller_id") || "";
+          const saved = await chrome.storage.local.get(["kocvip_shop_name"]);
+          shopName = saved?.kocvip_shop_name || "";
         } catch {}
-        statusSub.textContent = shopInfo;
+
+        if (shopName) {
+          statusTitle.textContent = `TikTok Shop: ${shopName}`;
+          statusSub.textContent = shopId ? `(ID: ${shopId})` : "affiliate.tiktok.com";
+        } else {
+          statusTitle.textContent = "TikTok Shop";
+          statusSub.textContent = shopId ? `ID: ${shopId}` : "affiliate.tiktok.com";
+        }
       } else {
         statusDot.className = "status-dot";
         statusTitle.textContent = "Chưa mở tab TikTok";

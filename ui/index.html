@@ -36,7 +36,8 @@
       <button type="button" id="btnOpenKocPool" class="chip-btn">
         📋 Nhập KOC
       </button>
-      <button type="button" id="btnOpenHistory" class="chip-btn" title="Xem lịch sử các đợt mời trước đó & xuất file đối chiếu" style="font-weight: 600;">
+      <button type="button" id="btnOpenHistory" class="chip-btn"
+        title="Xem lịch sử các đợt mời trước đó & xuất file đối chiếu" style="font-weight: 600;">
         📜 Lịch sử mời (<span id="historyCountBadge">0</span>)
       </button>
       <div id="tabStatusBadge" class="status-badge checking">
@@ -44,7 +45,6 @@
         <span class="text">Đang dò tab TikTok...</span>
       </div>
       <span class="daily-limit-badge" id="dailyLimitBadge">Hạn mức 24h: 0/10.000 (0/200 nhóm)</span>
-      <button type="button" id="btnOpenNewTab" class="icon-button" title="Mở tab riêng toàn màn hình">⤢</button>
     </div>
 
     <!-- 3-Column Grid -->
@@ -52,28 +52,20 @@
       <!-- CỘT 1: Thông tin lời mời -->
       <section class="invite-card">
         <h3>1. Thông tin lời mời</h3>
-        <div class="dialog-grid">
-          <label>
-            <span>Tên lời mời (Tối đa 26 ký tự)</span>
-            <input type="text" id="inputTitle" maxlength="26" placeholder="VD: CHAMVN x nhatminh">
-          </label>
-          <label>
-            <span>Nhân viên mời</span>
-            <input type="text" id="inputStaff" placeholder="Nhập tên NV (tự lưu)">
-          </label>
-        </div>
+        <label style="margin-bottom: 8px;">
+          <span>Tên lời mời</span>
+          <div class="input-with-counter">
+            <input type="text" id="inputTitle" maxlength="30" placeholder="VD: ChamVN x nhatminh">
+            <span id="titleCharCount" class="input-char-counter">0/30</span>
+          </div>
+        </label>
 
-        <!-- Cấu hình Đánh số thứ tự & Xem trước tên nhóm TikTok -->
-        <div class="group-seq-box" style="margin-top: -4px; margin-bottom: 12px; padding: 8px 10px; background: #f1f5f9; border-radius: 8px; border: 1px solid #e2e8f0;">
-          <label class="checkbox-row" style="margin-bottom: 4px; font-size: 12px; font-weight: 600; color: #1e293b; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+        <!-- Cấu hình Đánh số thứ tự -->
+        <div class="group-seq-box">
+          <label class="checkbox-row seq-checkbox-row" style="margin-bottom: 0;">
             <input type="checkbox" id="chkGlobalSeq" checked>
             <span>Đếm STT liên tục toàn bộ (Đánh dấu chuỗi mời tool)</span>
           </label>
-          <div id="previewGroupName" style="font-size: 12px; color: #475569; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
-            <span>👁️ Xem trước:</span>
-            <strong id="previewGroupNameVal" style="color: #0284c7; background: #e0f2fe; padding: 2px 6px; border-radius: 4px; font-family: monospace;">CHAMVN x nhatminh_001</strong>
-            <span id="previewSeqModeBadge" style="font-size: 11px; color: #64748b;">(Số tiếp: #001)</span>
-          </div>
         </div>
 
         <div class="dialog-grid">
@@ -251,7 +243,8 @@
       <div class="actions-left">
         <button type="button" id="btnCancel" class="secondary-button ghost">Hủy</button>
         <button type="button" id="btnOpenKocPoolFooter" class="secondary-button">📋 Quản lý KOC</button>
-        <button type="button" id="btnOpenHistoryFooter" class="secondary-button" title="Xem lịch sử các lần mời trước đó & xuất file đối chiếu">📜 Lịch sử mời</button>
+        <button type="button" id="btnOpenHistoryFooter" class="secondary-button"
+          title="Xem lịch sử các lần mời trước đó & xuất file đối chiếu">📜 Lịch sử mời</button>
       </div>
       <div class="actions-right">
         <span id="statusQuickText" class="status-quick-text"></span>
@@ -274,7 +267,7 @@
           Dán danh sách KOC (Excel, Sheets, CSV, @username, link TikTok, ID số):
         </p>
         <textarea id="kocDrawerText" class="koc-textarea"
-          placeholder="minhdz&#10;bepthongminh009&#10;@thuy_tieen22051999&#10;7495837291823719283"></textarea>
+          placeholder="nhatminhriviu&#10;nhatminh.ecom&#10;@nhatminh&#10;"></textarea>
 
         <div class="koc-drawer-actions">
           <div style="display: flex; gap: 8px; align-items: center;">
@@ -313,10 +306,13 @@
         </div>
 
         <div class="history-toolbar">
-          <input type="search" id="inputHistorySearch" placeholder="🔍 Tìm theo tên đợt, mã run..." class="history-search-input">
+          <input type="search" id="inputHistorySearch" placeholder="🔍 Tìm theo tên đợt, mã run..."
+            class="history-search-input">
           <div style="display: flex; gap: 8px; align-items: center;">
-            <button type="button" id="btnHistoryRefresh" class="secondary-button-sm" title="Làm mới danh sách">🔄 Làm mới</button>
-            <button type="button" id="btnExportAllHistoryExcel" class="secondary-button-sm btn-excel-green" title="Xuất toàn bộ KOC trong lịch sử ra 1 file Excel tổng hợp">📊 Xuất tất cả lịch sử</button>
+            <button type="button" id="btnHistoryRefresh" class="secondary-button-sm" title="Làm mới danh sách">🔄 Làm
+              mới</button>
+            <button type="button" id="btnExportAllHistoryExcel" class="secondary-button-sm btn-excel-green"
+              title="Xuất toàn bộ KOC trong lịch sử ra 1 file Excel tổng hợp">📊 Xuất tất cả lịch sử</button>
           </div>
         </div>
 

@@ -283,8 +283,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           shopId = u.searchParams.get("shop_id") || u.searchParams.get("shopId") || u.searchParams.get("oec_seller_id") || "";
           shopRegion = u.searchParams.get("shop_region") || u.searchParams.get("region") || "VN";
         } catch {}
-        const saved = await chrome.storage.local.get(["kocvip_shop_name"]);
-        const shopName = saved?.kocvip_shop_name || "Hannah Seyo";
+        let shopName = "";
+        try {
+          const domRes = await chrome.tabs.sendMessage(tab.id, { type: "KOCVIP_GET_DOM_SHOP_NAME" }).catch(() => null);
+          if (domRes?.shopName) {
+            shopName = domRes.shopName;
+            await chrome.storage.local.set({ kocvip_shop_name: shopName });
+          }
+        } catch {}
+
+        if (!shopName) {
+          const saved = await chrome.storage.local.get(["kocvip_shop_name"]);
+          shopName = saved?.kocvip_shop_name || "ChamVN";
+        }
+
         sendResponse({ success: true, data: { id: tab.id, url: tab.url, title: tab.title, shopId, shopRegion, shopName } });
       })
       .catch(err => sendResponse({ success: false, error: String(err?.message || err) }));

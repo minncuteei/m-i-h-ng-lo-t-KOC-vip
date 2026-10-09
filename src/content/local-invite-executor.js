@@ -147,6 +147,85 @@
     };
   }
 
+  function extractShopNameFromDOM() {
+    try {
+      // 1. Quét text nodes trong dropdown user profile (như ở Ảnh 1: "Vietnam (ChamVN)")
+      const allTextElements = document.querySelectorAll('div, span, p, h1, h2, h3, h4, a');
+      for (const el of allTextElements) {
+        const t = el.textContent?.trim();
+        if (t && /Vietnam\s*\(([^)]+)\)/i.test(t)) {
+          const m = t.match(/Vietnam\s*\(([^)]+)\)/i);
+          if (m && m[1] && m[1].trim().length >= 2) return m[1].trim();
+        }
+      }
+
+      // 2. Kiểm tra các selector phổ biến trong header TikTok Shop Seller Center
+      const selectors = [
+        '[class*="ShopInfo"] [class*="name"]',
+        '[class*="shop-name"]',
+        '[class*="shopName"]',
+        '[class*="seller-name"]',
+        '[class*="sellerName"]',
+        '[class*="account-name"]',
+        '[class*="accountName"]',
+        '[data-testid*="shop-name"]',
+        '.header-shop-name'
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        const text = el?.textContent?.trim();
+        if (text && text.length >= 2 && text.length <= 35 && !text.toLowerCase().includes("chọn") && !text.toLowerCase().includes("quản lý") && !text.toLowerCase().includes("tài khoản")) {
+          return text;
+        }
+      }
+    } catch {}
+    return "";
+  }
+
+  // Tự động gọi API /api/v1/affiliate/account/all_sellers/get lấy tên shop chính thức 100%
+  async function fetchShopInfoFromTikTokAPI() {
+    try {
+      const res = await executeInPage({
+        method: "GET",
+        path: "/api/v1/affiliate/account/all_sellers/get",
+        noShopInject: true,
+      });
+      if (res?.body?.data?.sellers_data) {
+        const sellers = res.body.data.sellers_data;
+        for (const [sId, sellerObj] of Object.entries(sellers)) {
+          const shopName = sellerObj?.shops?.[0]?.shop_name || sellerObj?.global_seller?.global_seller_name || "";
+          if (shopName) {
+            await chrome.storage.local.set({ kocvip_shop_name: shopName, kocvip_last_shop_id: sId });
+            return shopName;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[KOC VIP] fetchShopInfoFromTikTokAPI error:", e);
+    }
+    return "";
+  }
+
+  // Tự động nhận diện và đồng bộ tên shop chuẩn từ API & trang TikTok
+  setTimeout(async () => {
+    let sName = await fetchShopInfoFromTikTokAPI();
+    if (!sName) sName = extractShopNameFromDOM();
+    if (sName) {
+      chrome.storage.local.set({ kocvip_shop_name: sName });
+    }
+  }, 800);
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === "KOCVIP_GET_DOM_SHOP_NAME") {
+      (async () => {
+        let sName = await fetchShopInfoFromTikTokAPI();
+        if (!sName) sName = extractShopNameFromDOM();
+        sendResponse({ success: true, shopName: sName });
+      })();
+      return true;
+    }
+  });
+
   function ensurePageExecutorInjected() {
     try {
       if (document.getElementById("kocvip-page-executor-script")) return;
@@ -261,22 +340,18 @@
     return name;
   }
 
-  // Tên nhóm chuẩn hóa: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_08-10_001)
+  // Tên nhóm chuẩn hóa: [Tên Shop / Tiêu đề]_[Số thứ tự] (VD: ChạmVN x nhatminh_001)
   function tenNhomTheoLan(groupName, soNhom) {
     let ten = String(groupName || "").trim();
     ten = ten.replace(/[/\\:*?"<>|~`!@#$%^&=+{}\[\];]/g, "-").replace(/\s+/g, " ").replace(/[-_]{2,}/g, "_");
-    // Nếu tên đã chuẩn định dạng hợp lệ đuôi _DD-MM_XXX
-    if (/_\d{2}[-_]\d{2}_\d{3}$/.test(ten)) {
+    // Nếu tên đã chuẩn định dạng hợp lệ đuôi _XXX hoặc _DD-MM_XXX
+    if (/_\d{3,}$/.test(ten) || /_\d{2}[-_]\d{2}_\d{3}$/.test(ten)) {
       return sanitizeInvitationName(ten);
     }
     const lan = Math.max(1, Number(soNhom || 1));
-    const now = new Date();
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const cleanTen = ten.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").trim();
-    const suffix = `_${dd}-${mm}_${String(lan).padStart(3, "0")}`; // Dài 11 ký tự: _08-10_001
-    // Giới hạn phần prefix tối đa 30 - 11 = 19 ký tự để đảm bảo tổng độ dài luôn <= 30 ký tự
-    const maxPrefixLen = Math.max(5, 30 - suffix.length);
+    const cleanTen = ten.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_\d+$/i, "").replace(/_N\d+$/i, "").trim();
+    const suffix = `_${String(lan).padStart(3, "0")}`; // Dài 4 ký tự: _001, _023...
+    const maxPrefixLen = Math.max(5, 30 - suffix.length); // 26 ký tự
     const prefix = cleanTen.slice(0, maxPrefixLen).trim();
     const formatted = `${prefix}${suffix}`;
     return sanitizeInvitationName(formatted);

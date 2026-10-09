@@ -15,7 +15,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Campaign Form
   const inputTitle = document.getElementById("inputTitle");
-  const inputStaff = document.getElementById("inputStaff");
+  const titleCharCount = document.getElementById("titleCharCount");
+  const chkGlobalSeq = document.getElementById("chkGlobalSeq");
   const inputExpiresAt = document.getElementById("inputExpiresAt");
   const selectContentType = document.getElementById("selectContentType");
   const inputCommission = document.getElementById("inputCommission");
@@ -178,11 +179,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       const res = await chrome.runtime.sendMessage({ type: "KOCVIP_GET_TIKTOK_TAB" });
       if (res?.success && res.data) {
         activeTikTokTab = res.data;
-        const shopName = res.data.shopName || currentShopName || "Hannah Seyo";
+        const shopName = res.data.shopName || currentShopName || "ChamVN";
         if (res.data.shopName && !currentShopName) currentShopName = res.data.shopName;
-        const shopIdText = res.data.shopId ? ` (${res.data.shopId})` : "";
+        const shopIdText = res.data.shopId ? ` (ID: ${res.data.shopId})` : "";
         tabStatusBadge.className = "status-badge connected";
-        tabStatusBadge.innerHTML = `<span class="dot"></span><span class="text">Đã nối: <b>${escapeHtml(shopName)}</b>${shopIdText}</span>`;
+        tabStatusBadge.innerHTML = `<span class="dot"></span><span class="text">TikTok Shop: <b>${escapeHtml(shopName)}</b>${shopIdText}</span>`;
 
         const newShopId = String(res.data.shopId || res.data.shopName || "").trim();
         // Nhận biết shop khác nhau: Nếu chuyển tab sang shop mới, tự động nạp danh mục shop mới
@@ -209,27 +210,134 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let currentShopName = "";
 
+  function updateTitleCharCounter() {
+    if (!titleCharCount || !inputTitle) return;
+    const isGlobal = chkGlobalSeq ? chkGlobalSeq.checked : true;
+    const maxAllowed = isGlobal ? 26 : 30;
+    inputTitle.maxLength = maxAllowed;
+
+    const len = (inputTitle.value || "").length;
+    titleCharCount.textContent = `${len}/${maxAllowed}`;
+    if (len > maxAllowed) {
+      titleCharCount.style.color = "#ffffff";
+      titleCharCount.style.background = "#ef4444";
+      titleCharCount.style.borderColor = "#dc2626";
+      inputTitle.style.borderColor = "#ef4444";
+    } else if (len === maxAllowed) {
+      titleCharCount.style.color = "#ef4444";
+      titleCharCount.style.background = "rgba(239, 68, 68, 0.1)";
+      titleCharCount.style.borderColor = "rgba(239, 68, 68, 0.3)";
+      inputTitle.style.borderColor = "var(--line, #e2e8f0)";
+    } else {
+      titleCharCount.style.color = "var(--text-muted, #94a3b8)";
+      titleCharCount.style.background = "var(--surface-2, #f8fafc)";
+      titleCharCount.style.borderColor = "var(--line, #e2e8f0)";
+      inputTitle.style.borderColor = "var(--line, #e2e8f0)";
+    }
+  }
+
+  function validateTitleLength() {
+    const raw = (inputTitle?.value || "").trim();
+    const isGlobal = chkGlobalSeq ? chkGlobalSeq.checked : true;
+    const maxAllowed = isGlobal ? 26 : 30;
+    if (raw.length > maxAllowed) {
+      if (inputTitle) {
+        inputTitle.style.borderColor = "#ef4444";
+        inputTitle.focus();
+      }
+      alert(`⚠️ Tên lời mời vượt quá ${maxAllowed} ký tự (hiện tại ${raw.length}/${maxAllowed}).\n\n${isGlobal ? 'Do có đếm STT chuỗi (_001) chiếm 4 ký tự, phần tên chỉ được đặt tối đa 26 ký tự.' : 'Đã giới hạn tối đa 30 ký tự.'}\nVui lòng rút ngắn tên lại để gửi thành công!`);
+      return false;
+    }
+    return true;
+  }
+
   function generateDefaultTitle(customShop) {
-    const shop = (customShop || currentShopName || "Hannah Seyo").trim();
+    const shop = (customShop || currentShopName || "ChamVN").trim();
     return `${shop} x nhatminh`;
   }
 
-  // Cấu trúc đặt tên chuẩn: shop x nhatminh_ngày tháng tạo_số thứ tự (VD: Hannah Seyo x nhatminh_08-10_001)
+  // Cấu trúc đặt tên chuẩn: [Tên Shop / Tiêu đề]_[Số thứ tự] (VD: ChạmVN x nhatminh_001)
   // TikTok giới hạn độ dài Tên lời mời tối đa chính xác 30 ký tự (0/30)
-  function formatInvitationGroupName(baseTitle, index) {
-    const now = new Date();
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const suffix = `_${dd}-${mm}_${String(index).padStart(3, "0")}`; // Dài 11 ký tự: _08-10_001
-    let clean = String(baseTitle || generateDefaultTitle()).trim();
+  function formatInvitationGroupName(basePrefix, seqNum) {
+    const idxStr = String(seqNum).padStart(3, "0");
+    const suffix = `_${idxStr}`; // Dài 4 ký tự: _001, _023, _105...
+    let clean = String(basePrefix || generateDefaultTitle()).trim();
     clean = clean.replace(/[/\\:*?"<>|~`!@#$%^&=+{}\[\];]/g, "-").replace(/\s+/g, " ").replace(/[-_]{2,}/g, "_");
-    clean = clean.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").replace(/_TEST$/i, "").trim();
-    // Giới hạn phần prefix tối đa 30 - 11 = 19 ký tự để đảm bảo tổng độ dài luôn <= 30 ký tự
+    clean = clean.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_\d+$/i, "").replace(/_N\d+$/i, "").replace(/_TEST$/i, "").trim();
+    // Giới hạn phần prefix tối đa 30 - 4 = 26 ký tự để đảm bảo tổng độ dài luôn <= 30 ký tự
     const maxPrefixLen = Math.max(5, 30 - suffix.length);
     const prefix = clean.slice(0, maxPrefixLen).trim();
     let name = `${prefix}${suffix}`;
     if (name.length > 30) name = name.slice(0, 30).trim();
     return name;
+  }
+
+  // Đọc & Tính toán số thứ tự tiếp theo
+  async function getNextGroupSequence(baseTitle, isGlobal) {
+    const clean = String(baseTitle || generateDefaultTitle()).trim();
+    // Kiểm tra xem người dùng có gõ chủ động số ở đuôi không (ví dụ: Váy Xinh_030 hoặc _30)
+    const manualMatch = clean.match(/_(\d+)$/);
+    if (manualMatch) {
+      return {
+        prefix: clean.replace(/_\d+$/, "").trim(),
+        startSeq: parseInt(manualMatch[1], 10),
+        isManual: true,
+      };
+    }
+
+    const stored = await chrome.storage.local.get(["kocvip_global_group_seq", "kocvip_name_seq_map"]);
+    const globalSeq = Number(stored?.kocvip_global_group_seq || 0);
+    const nameMap = stored?.kocvip_name_seq_map || {};
+
+    const cleanBase = clean.replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_N\d+$/i, "").replace(/_TEST$/i, "").trim();
+    const prefixKey = cleanBase.toLowerCase();
+    const prefixSeq = Number(nameMap[prefixKey] || 0);
+
+    const startSeq = isGlobal ? (globalSeq + 1) : (prefixSeq + 1);
+    return {
+      prefix: cleanBase,
+      startSeq: Math.max(1, startSeq),
+      isManual: false,
+    };
+  }
+
+  // Lưu số thứ tự lớn nhất đã sử dụng
+  async function saveGroupSequence(basePrefix, maxSeqUsed, isGlobal) {
+    const stored = await chrome.storage.local.get(["kocvip_global_group_seq", "kocvip_name_seq_map"]);
+    let globalSeq = Number(stored?.kocvip_global_group_seq || 0);
+    let nameMap = stored?.kocvip_name_seq_map || {};
+
+    if (maxSeqUsed > globalSeq) {
+      globalSeq = maxSeqUsed;
+    }
+    const cleanBase = String(basePrefix || "").replace(/_\d{2}[/-]\d{2}_\d+$/i, "").replace(/_\d+$/i, "").replace(/_N\d+$/i, "").trim();
+    const prefixKey = cleanBase.toLowerCase();
+    if (prefixKey) {
+      nameMap[prefixKey] = Math.max(Number(nameMap[prefixKey] || 0), maxSeqUsed);
+    }
+    await chrome.storage.local.set({
+      kocvip_global_group_seq: globalSeq,
+      kocvip_name_seq_map: nameMap,
+    });
+  }
+
+  async function updateGroupNamePreview() {
+    updateTitleCharCounter();
+    if (!previewGroupNameVal) return;
+    const isGlobal = chkGlobalSeq ? chkGlobalSeq.checked : true;
+    const titleVal = (inputTitle ? inputTitle.value.trim() : "") || generateDefaultTitle();
+    const seqInfo = await getNextGroupSequence(titleVal, isGlobal);
+    const previewName = formatInvitationGroupName(seqInfo.prefix, seqInfo.startSeq);
+    previewGroupNameVal.textContent = previewName;
+    if (previewSeqModeBadge) {
+      if (seqInfo.isManual) {
+        previewSeqModeBadge.textContent = `(Tự gõ: #${String(seqInfo.startSeq).padStart(3, "0")})`;
+      } else if (isGlobal) {
+        previewSeqModeBadge.textContent = `(Toàn cục: #${String(seqInfo.startSeq).padStart(3, "0")})`;
+      } else {
+        previewSeqModeBadge.textContent = `(Theo tên: #${String(seqInfo.startSeq).padStart(3, "0")})`;
+      }
+    }
   }
 
   // Quản lý Hạn mức 24h Thông minh (Reset lúc 00:00 mỗi ngày)
@@ -256,31 +364,65 @@ document.addEventListener("DOMContentLoaded", async () => {
     dailyLimitBadge.textContent = `Hạn mức 24h: ${formatNumberVN(kocCount)}/10.000 (${formatNumberVN(groupCount)}/200 nhóm)`;
   }
 
-  function setQuickExpiryDays(days) {
-    const target = new Date(Date.now() + Number(days) * 86400000);
-    inputExpiresAt.value = target.toISOString().split("T")[0];
+  function setActiveQuickDateButton(activeBtn) {
+    document.querySelectorAll(".quick-date-row button").forEach(b => b.classList.remove("active"));
+    if (activeBtn) activeBtn.classList.add("active");
   }
 
-  function setQuickExpiryMonths(months) {
+  function setQuickExpiryDays(days, btn) {
+    const target = new Date(Date.now() + Number(days) * 86400000);
+    inputExpiresAt.value = target.toISOString().split("T")[0];
+    const targetBtn = btn || document.querySelector(`.quick-date-row button[data-days="${days}"]`);
+    setActiveQuickDateButton(targetBtn);
+  }
+
+  function setQuickExpiryMonths(months, btn) {
     const target = new Date();
     target.setMonth(target.getMonth() + Number(months));
     inputExpiresAt.value = target.toISOString().split("T")[0];
+    const targetBtn = btn || document.querySelector(`.quick-date-row button[data-months="${months}"]`);
+    setActiveQuickDateButton(targetBtn);
   }
 
   // Bấm nút chọn nhanh thời hạn (1 tuần, 1 tháng, 3 tháng, 6 tháng, 1 năm)
   document.querySelectorAll(".quick-date-row button").forEach(btn => {
     btn.addEventListener("click", () => {
-      if (btn.dataset.days) setQuickExpiryDays(btn.dataset.days);
-      else if (btn.dataset.months) setQuickExpiryMonths(btn.dataset.months);
+      if (btn.dataset.days) setQuickExpiryDays(btn.dataset.days, btn);
+      else if (btn.dataset.months) setQuickExpiryMonths(btn.dataset.months, btn);
       saveSettings();
     });
   });
 
+  if (inputExpiresAt) {
+    inputExpiresAt.addEventListener("change", () => {
+      // Khi người dùng tự chọn ngày tùy biến, xóa active button nếu không khớp
+      const currentVal = inputExpiresAt.value;
+      let matched = false;
+      document.querySelectorAll(".quick-date-row button").forEach(btn => {
+        if (btn.dataset.days) {
+          const d = new Date(Date.now() + Number(btn.dataset.days) * 86400000).toISOString().split("T")[0];
+          if (d === currentVal) {
+            setActiveQuickDateButton(btn);
+            matched = true;
+          }
+        }
+      });
+      if (!matched) {
+        document.querySelectorAll(".quick-date-row button").forEach(b => b.classList.remove("active"));
+      }
+      saveSettings();
+    });
+  }
+
   // Lưu toàn bộ cài đặt form vào chrome.storage.local
   function saveSettings() {
+    const activeBtn = document.querySelector(".quick-date-row button.active");
+    const activeQuickKey = activeBtn ? (activeBtn.dataset.days ? `d_${activeBtn.dataset.days}` : `m_${activeBtn.dataset.months}`) : "d_7";
+
     const settings = {
       title: inputTitle.value,
-      staff: inputStaff.value || "nhatminh",
+      globalSeq: chkGlobalSeq ? chkGlobalSeq.checked : true,
+      activeQuickKey,
       expiresAt: inputExpiresAt.value,
       contentType: selectContentType.value,
       commission: inputCommission.value,
@@ -300,6 +442,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
     chrome.storage.local.set({ kocvip_saved_settings: settings });
     updatePreview();
+    updateGroupNamePreview();
   }
 
   // Tải lại các giá trị đã lưu trước đó
@@ -312,13 +455,29 @@ document.addEventListener("DOMContentLoaded", async () => {
         inputTitle.value = generateDefaultTitle();
       }
 
-      // Mặc định nhân viên: nhatminh
-      inputStaff.value = s.staff || "nhatminh";
+      if (chkGlobalSeq && s.globalSeq !== undefined) {
+        chkGlobalSeq.checked = !!s.globalSeq;
+      }
 
       if (s.expiresAt) {
         inputExpiresAt.value = s.expiresAt;
       } else {
         setQuickExpiryDays(7); // Mặc định 1 tuần nếu chưa chọn
+      }
+
+      if (s.activeQuickKey) {
+        if (s.activeQuickKey.startsWith("d_")) {
+          const days = s.activeQuickKey.replace("d_", "");
+          const btn = document.querySelector(`.quick-date-row button[data-days="${days}"]`);
+          setActiveQuickDateButton(btn);
+        } else if (s.activeQuickKey.startsWith("m_")) {
+          const months = s.activeQuickKey.replace("m_", "");
+          const btn = document.querySelector(`.quick-date-row button[data-months="${months}"]`);
+          setActiveQuickDateButton(btn);
+        }
+      } else {
+        const btn1w = document.querySelector(`.quick-date-row button[data-days="7"]`);
+        setActiveQuickDateButton(btn1w);
       }
 
       if (s.contentType) selectContentType.value = s.contentType;
@@ -372,7 +531,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
       const DEFAULT_INVITE_MESSAGE = "Chào {{creators_username}}, mình bên Shop phụ trách chiến dịch cho các sản phẩm của shop và thấy kênh bạn rất phù hợp. Mời bạn nhận mẫu + gắn giỏ kiếm hoa hồng nhé!";
       inputTitle.value = generateDefaultTitle();
-      inputStaff.value = "nhatminh";
       inputZalo.value = "0943102588";
       inputMessage.value = DEFAULT_INVITE_MESSAGE;
       setQuickExpiryDays(7); // Mặc định 1 tuần theo yêu cầu
@@ -380,15 +538,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     getDailyQuota().then(updateDailyLimitBadge);
     updatePreview();
+    updateGroupNamePreview();
   });
 
   // Bắt sự kiện thay đổi trên toàn bộ các input / select / checkbox để tự động lưu
-  [inputTitle, inputStaff, inputExpiresAt, selectContentType, inputCommission, inputAdsCommission, inputZalo, inputFacebook, inputMessage, inputTestRunCount].forEach(el => {
+  [inputTitle, inputExpiresAt, selectContentType, inputCommission, inputAdsCommission, inputZalo, inputFacebook, inputMessage, inputTestRunCount].forEach(el => {
     if (el) {
       el.addEventListener("input", saveSettings);
       el.addEventListener("change", saveSettings);
     }
   });
+
+  if (inputTitle) {
+    inputTitle.addEventListener("input", updateGroupNamePreview);
+  }
+
+  if (chkGlobalSeq) {
+    chkGlobalSeq.addEventListener("change", () => {
+      saveSettings();
+      updateTitleCharCounter();
+      updateGroupNamePreview();
+    });
+  }
 
   if (selectSafeDelay) selectSafeDelay.addEventListener("change", saveSettings);
 
@@ -698,7 +869,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 4. Cập nhật Xem trước (Card 4 - Đã mở rộng khung xem)
   function updatePreview() {
-    previewTitle.textContent = inputTitle.value.trim() || generateDefaultTitle();
+    const isGlobal = chkGlobalSeq ? chkGlobalSeq.checked : true;
+    const rawVal = (inputTitle ? inputTitle.value.trim() : "") || generateDefaultTitle();
+    getNextGroupSequence(rawVal, isGlobal).then(seqInfo => {
+      const formattedTitle = formatInvitationGroupName(seqInfo.prefix, seqInfo.startSeq);
+      if (previewTitle) previewTitle.textContent = formattedTitle;
+    });
     previewMessage.textContent = inputMessage.value.trim() || "Nội dung lời mời sẽ hiển thị tại đây...";
 
     const selectedList = rawProducts.filter(p => selectedProductIds.has(p.productId));
@@ -1105,6 +1281,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 6b. Kiểm tra cấu hình (1 KOC) - Chế độ cô lập lỗi trước khi chạy hàng loạt
   btnDryRun.addEventListener("click", async () => {
+    if (!validateTitleLength()) return;
     if (!activeTikTokTab) {
       alert("Chưa kết nối tab TikTok Affiliate. Vui lòng mở https://affiliate.tiktok.com và đăng nhập shop.");
       return;
@@ -1240,6 +1417,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 7. Gửi Thật (BẮT ĐẦU MỜI HÀNG LOẠT)
   btnSendReal.addEventListener("click", async () => {
     if (btnSendReal.disabled) return;
+    if (!validateTitleLength()) return;
 
     if (!activeTikTokTab) {
       alert("Chưa kết nối tab TikTok. Vui lòng mở https://affiliate.tiktok.com hoặc https://seller-vn.tiktok.com và đăng nhập shop.");
@@ -1348,22 +1526,33 @@ document.addEventListener("DOMContentLoaded", async () => {
         status: "local_pending",
       }));
 
-      // Tự động phân chia thành các chunk 50 KOC theo giới hạn chuẩn của TikTok (tên nhóm _N1, _N2 chuẩn xác)
+      const isGlobalSeq = chkGlobalSeq ? chkGlobalSeq.checked : true;
+      const seqInfo = await getNextGroupSequence(baseTitle, isGlobalSeq);
+      let currentSeq = seqInfo.startSeq;
+
+      // Tự động phân chia thành các chunk 50 KOC theo giới hạn chuẩn của TikTok (tên nhóm _001, _002 chuẩn xác)
       const chunkSize = 50;
       const chunks = [];
       for (let i = 0; i < allRecipients.length; i += chunkSize) {
         const batch = allRecipients.slice(i, i + chunkSize);
         const chunkIndex = Math.floor(i / chunkSize) + 1;
-        const groupName = formatInvitationGroupName(baseTitle, chunkIndex);
+        const groupSeq = currentSeq;
+        const groupName = formatInvitationGroupName(seqInfo.prefix, groupSeq);
         chunks.push({
           chunkId: `${runId}_c${chunkIndex}`,
           serverRunId: runId,
           groupName,
-          soNhomDaMo: chunkIndex,
+          soNhomDaMo: groupSeq,
           status: "local_pending",
           recipients: batch,
         });
+        currentSeq++;
       }
+
+      // Lưu lại số thứ tự lớn nhất đã sử dụng
+      const maxSeqUsed = currentSeq - 1;
+      await saveGroupSequence(seqInfo.prefix, maxSeqUsed, isGlobalSeq);
+      updateGroupNamePreview();
 
       const manifest = {
         serverRunId: runId,
@@ -2371,9 +2560,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.parent.postMessage({ type: "KOCVIP_MINIMIZE_OVERLAY" }, "*");
   });
 
-  btnOpenNewTab.addEventListener("click", () => {
-    chrome.runtime.sendMessage({ type: "KOCVIP_OPEN_FULL_UI" });
-  });
+  if (btnOpenNewTab) {
+    btnOpenNewTab.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ type: "KOCVIP_OPEN_FULL_UI" });
+    });
+  }
 
   btnCancel.addEventListener("click", () => {
     window.parent.postMessage({ type: "KOCVIP_CLOSE_OVERLAY" }, "*");
